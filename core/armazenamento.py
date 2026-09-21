@@ -92,6 +92,11 @@ class Database:
                 ocorrencia_id TEXT,
                 detalhe TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS agenda_cache (
+                medicamento_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL
+            );
             """
         )
 
@@ -240,3 +245,30 @@ class Database:
             "SELECT COUNT(*) AS n FROM outbox WHERE status = 'pendente'"
         ).fetchone()
         return int(linha["n"])
+
+    # --- agenda cache (sincronizada com o backend, Fase 3) -----------------
+
+    def substituir_agenda(self, medicamentos: list[dict]) -> None:
+        """Substitui a agenda em cache pelos medicamentos do backend."""
+        conn = self.conexao
+        agora = self._agora()
+        linhas = [
+            (str(med.get("id", "")), json.dumps(med, ensure_ascii=False), agora)
+            for med in medicamentos
+        ]
+        with conn:
+            conn.execute("DELETE FROM agenda_cache")
+            conn.executemany(
+                """
+                INSERT INTO agenda_cache (medicamento_id, payload, atualizado_em)
+                VALUES (?, ?, ?)
+                """,
+                linhas,
+            )
+
+    def agenda_cached(self) -> list[dict]:
+        """Lê a agenda sincronizada em cache, na ordem em que foi gravada."""
+        linhas = self.conexao.execute(
+            "SELECT payload FROM agenda_cache ORDER BY rowid"
+        ).fetchall()
+        return [json.loads(l["payload"]) for l in linhas]
