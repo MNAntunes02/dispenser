@@ -6,7 +6,8 @@ from core.config import Config
 from core.coordenador import AgendaMemo, Coordenador, PublicadorLog
 from core.maquina_estados import Fase, processar
 from core.notificador import Notificador
-from core.sync import SyncService
+from core.sync import FonteAgendaLocal, Sincronizador, SyncService
+from core.transporte import Transporte, TransporteFirestore
 from hardware.bridge.hardware_bridge import HardwareBridge
 
 
@@ -16,6 +17,10 @@ def test_modulos_core_importam():
     assert processar.__name__ == "processar"
     assert Notificador.__name__ == "Notificador"
     assert SyncService.__name__ == "SyncService"
+    assert Sincronizador.__name__ == "Sincronizador"
+    assert FonteAgendaLocal.__name__ == "FonteAgendaLocal"
+    assert TransporteFirestore.__name__ == "TransporteFirestore"
+    assert issubclass(TransporteFirestore, Transporte)
     assert Coordenador.__name__ == "Coordenador"
     assert AgendaMemo.__name__ == "AgendaMemo"
     assert PublicadorLog.__name__ == "PublicadorLog"
