@@ -1,10 +1,10 @@
-"""Testes de esqueleto da Fase 1: módulos importam e contratos existem."""
+"""Testes de esqueleto: módulos importam e contratos existem."""
 
-import pytest
-
-from core.armazenamento import Database
 from core.agendador import Agendador
-from core.maquina_estados import Fase, MaquinaEstados
+from core.armazenamento import Database
+from core.config import Config
+from core.coordenador import AgendaMemo, Coordenador, PublicadorLog
+from core.maquina_estados import Fase, processar
 from core.notificador import Notificador
 from core.sync import SyncService
 from hardware.bridge.hardware_bridge import HardwareBridge
@@ -13,23 +13,35 @@ from hardware.bridge.hardware_bridge import HardwareBridge
 def test_modulos_core_importam():
     assert Database.__name__ == "Database"
     assert Agendador.__name__ == "Agendador"
-    assert MaquinaEstados.__name__ == "MaquinaEstados"
+    assert processar.__name__ == "processar"
     assert Notificador.__name__ == "Notificador"
     assert SyncService.__name__ == "SyncService"
+    assert Coordenador.__name__ == "Coordenador"
+    assert AgendaMemo.__name__ == "AgendaMemo"
+    assert PublicadorLog.__name__ == "PublicadorLog"
 
 
 def test_fases_da_dose_definidas():
     fases = {f.value for f in Fase}
     assert fases == {
-        "espera",
-        "alarme",
-        "abrir",
-        "ingerir",
-        "devolver",
-        "confirmada",
-        "perdida",
-        "retorno_pendente",
+        "AGUARDANDO",
+        "ALARME",
+        "AGUARDANDO_GAVETA",
+        "GAVETA_ABERTA",
+        "MEDICAMENTO_RETIRADO",
+        "AGUARDANDO_RETORNO",
+        "RETORNO_PENDENTE",
+        "CONCLUIDA",
+        "NAO_ATENDIDA",
+        "FALHA",
     }
+
+
+def test_config_de_env_usa_padroes():
+    cfg = Config.de_env()
+    assert cfg.intervalo_alarme_s == 120
+    assert cfg.max_tentativas == 5
+    assert cfg.limite_retorno_s == 1800
 
 
 def test_ponte_implementa_contrato():
@@ -41,12 +53,6 @@ def test_ponte_implementa_contrato():
 def test_banco_ok(db):
     db.conexao.execute("select 1")
     assert db.conexao is not None
-
-
-def test_transicao_pendente_de_implementacao(ponte_simulada, db):  # noqa: ARG001
-    maquina = MaquinaEstados()
-    with pytest.raises(NotImplementedError):
-        maquina.transicionar("gaveta_aberta")
 
 
 def test_status_da_ponte_simulada(ponte_simulada):
