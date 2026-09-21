@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Flutter (a pasta ui/ tem o próprio .gitignore)
+ui/build/
+ui/.dart_tool/
+
+# Ambiente e segredos
+.env
+*.env
+DISPENSER_CREDENTIALS_PATH
+google-services.json
+*.pem
+*.key
+*.jwt
+
+# Estado local
+*.db
+*.db-wal
+*.db-shm
+
+# Sistema
+.vscode/
+.idea/
+*.log

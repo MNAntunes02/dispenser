@@ -1,0 +1,16 @@
+# dispenser-ui.service
+# Esboço da Fase 1; configurado na Fase 5 (UI) e validado na Fase 7.
+
+[Unit]
+Description=Dispensador de medicamentos - interface LCD
+After=dispenser-core.service
+Requires=dispenser-core.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dispenser-ui
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

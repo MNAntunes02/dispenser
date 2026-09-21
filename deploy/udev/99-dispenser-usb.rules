@@ -1,0 +1,5 @@
+# Regra udev: nome estável para a placa do dispensador (Fase 4/7 ajusta).
+# Local de instalação: /etc/udev/rules.d/99-dispenser-usb.rules
+# Identifique por ID_VENDOR/ID_MODEL reais da placa escolhida.
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", SYMLINK+="dispenser-board", MODE="0660", GROUP="dispenser"

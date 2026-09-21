@@ -1,0 +1,1 @@
+"""Núcleo do dispensador (agendador, máquina de estados, sync, notificador)."""

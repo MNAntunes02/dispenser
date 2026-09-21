@@ -1,0 +1,1 @@
+"""Ponte de hardware (interface)."""

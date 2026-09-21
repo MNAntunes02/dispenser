@@ -1,0 +1,1 @@
+"""Ponte de hardware: implementação real e simulada."""

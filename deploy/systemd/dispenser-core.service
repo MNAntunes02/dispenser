@@ -1,0 +1,17 @@
+# dispenser-core.service
+# Esboço da Fase 1; configurado e validado na Fase 7 (boot/robustez).
+
+[Unit]
+Description=Dispensador de medicamentos - nucleo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dispenser-core
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/dispenser/.env
+
+[Install]
+WantedBy=multi-user.target
