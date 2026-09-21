@@ -6,9 +6,13 @@ from core.config import Config
 from core.coordenador import AgendaMemo, Coordenador, PublicadorLog
 from core.maquina_estados import Fase, processar
 from core.notificador import Notificador
+from core.provisionamento import Provisionador
 from core.sync import FonteAgendaLocal, Sincronizador, SyncService
 from core.transporte import Transporte, TransporteFirestore
 from hardware.bridge.hardware_bridge import HardwareBridge
+from hardware.gatt.servico_gatt import ServicoGatt, ServicoGattSimulado
+from hardware.tela import Tela
+from rede.rede import Rede, RedeLinux, RedeSimulada
 
 
 def test_modulos_core_importam():
@@ -53,6 +57,14 @@ def test_ponte_implementa_contrato():
     from hardware.bridge.bridge_simulada import PonteSimulada
 
     assert issubclass(PonteSimulada, HardwareBridge)
+
+
+def test_provisionamento_implementa_contratos():
+    assert Provisionador.__name__ == "Provisionador"
+    assert issubclass(RedeSimulada, Rede)
+    assert issubclass(RedeLinux, Rede)
+    assert issubclass(ServicoGattSimulado, ServicoGatt)
+    assert hasattr(Tela, "mostrar")
 
 
 def test_banco_ok(db):

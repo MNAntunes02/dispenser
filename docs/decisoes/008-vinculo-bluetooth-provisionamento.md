@@ -1,7 +1,8 @@
 # ADR 008 — Vínculo app↔dispensador via Bluetooth (onboarding) e provisionamento de rede
 
-Status: desenhada e aprovada (Fase 3, 2026-09-21); **implementação na Fase 3b**
-(depende de Pi/LCD/botão e exige autorização para alterar o app Flutter).
+Status: implementada (Fase 3b, 2026-09-21) **com fakes/simulações e app**;
+**validar no Pi** quando hardware chegar (servidores GATT `bluez_servico.py` e
+`RedeLinux` só rodam lá; ver `docs/BLUETOOTH.md`).
 
 ## Contexto
 A aba "Dispositivo" do app (hoje placeholder) deve conectar/vincular o app ao

@@ -3,8 +3,9 @@
 Atualize este arquivo ao final de cada fase. Ele é carregado no início de cada sessão.
 
 ## Estado atual
-- Fase atual: 3 (Sync com backend), concluída em 2026-09-21
-- Próximas: Fase 4 (hardware real) e Fase 3b (vínculo/provisionamento via Bluetooth — ADR 008, aguarda Pi + autorização do app)
+- Fase atual: 3b (Vínculo/provisionamento via Bluetooth), concluída em 2026-09-21
+  **com fakes/app**; validar parte real (BlueZ/NetworkManager/LCD) quando o Pi chegar.
+- Próximas: Fase 4 (hardware real) e Fase 3b-run (rodar no Pi).
 
 ## Fases
 | # | Fase | Status | Aprovada em | Notas |
@@ -12,8 +13,8 @@ Atualize este arquivo ao final de cada fase. Ele é carregado no início de cada
 | 0 | Descoberta | concluída | 2026-09-20 | Ver `dispenser/docs/DESCOBERTA.md` |
 | 1 | Arquitetura | concluída | 2026-09-20 | ADRs 001-005 em `docs/decisoes/`; esqueleto criado |
 | 2 | Núcleo | concluída | 2026-09-21 | Máquina pura, agendador, SQLite/outbox, coordenador; ADR 006 |
-| 3 | Sync com backend | concluída | 2026-09-21 | Firestore REST + credencial própria; 69 testes verdes; ADRs 007 e 008 |
-| 3b | Vínculo BT (onboarding) | pendente | | Desenho aprovado (ADR 008); implementação depende de Pi/placa e autorização do app |
+| 3 | Sync com backend | concluída | 2026-09-21 | Firestore REST + credencial própria; 99 testes verdes; ADRs 007 e 008 |
+| 3b | Vínculo BT (onboarding) | concluída | 2026-09-21 | `docs/BLUETOOTH.md`; GATT Pi + provisionador + rede + aba Dispositivo do app; validar no Pi (Fase 3b-run) |
 | 4 | Hardware real | pendente | | |
 | 5 | UI (LCD) | pendente | | |
 | 6 | Notificações | pendente | | |
@@ -34,6 +35,11 @@ Sync com backend (Fase 3, ADRs 007 e 008 + `docs/firestore-integracao.md`):
 - `core/dispenser_main.py`: com credencial configurada usa Firestore; senão demo/`DISPENSER_AGENDA_JSON`. `.env.example` += `DISPENSER_FIREBASE_API_KEY` e formato do arquivo 600.
 - `app-saude/firestore.rules` **ajustadas** (autorizado): `isDispenserDo` + coleção `Dispensadores` (paciente cria/atualiza o vínculo).
 
+Vínculo BT (Fase 3b, ADR 008 implementada + `docs/BLUETOOTH.md`):
+- **Pi**: `core/provisionamento.py` (FSM pura: código 6 dígitos one-time/10 min, validação, net, env 600 via `MontadorChunks`); `core/dispenser_main.py` carrega `/var/lib/dispenser/dispenser.env`; entrypoint `core/provision_main.py` (`dispenser-provision`, `--simulado` sem HW); `rede/rede.py` (`RedeLinux` nmcli→netplan + `RedeSimulada`); `hardware/gatt/` (`ServicoGattSimulado` + `ServicoGattBlueZ` D-Bus — só no Pi); `hardware/tela.py`. `requirements` += `dbus-next`.
+- **App (autorizado)**: `pubspec` += `flutter_blue_plus` (connect exige `License.nonprofit`); `lib/services/dispositivo_ble.dart` (`ParqueamentoBle` + fake, chunking ≤240 B) e `lib/services/vinculo_dispensador.dart` (Firestore `Dispensadores/{uid}` + fake); aba `lib/main/dispositivo.dart` reescrita (não vinculado → escaneando → pareando → vinculado/Reconfigurar/Desvincular); permissões BLE em AndroidManifest e Info.plist; regras `Dispensadores` com leitura restrita ao dono.
+- **Testes**: +30 pytest no Pi (99 no total) e 12 `flutter test` no app; todo o fluxo herméticamente fechado com fakes. **Validar** `ServicoGattBlueZ`, `RedeLinux`, LCD/botão no Pi (Fase 3b-run).
+
 Suposições da Fase 0 (respondidas pelo usuário; detalhes e riscos em `dispenser/docs/DESCOBERTA.md`):
 - Gaveta abre livremente, sem trava; um medicamento por slot; devolução do recipiente inteiro.
 - Não existe firmware de placa; tela LCD HDMI sem touch; sem RTC no Pi (depender de NTP).
@@ -44,12 +50,9 @@ Suposições da Fase 0 (respondidas pelo usuário; detalhes e riscos em `dispens
 - **Vínculo app↔dispensador via Bluetooth** (novo): BT = onboarding/provisionamento (Wi-Fi + config Firebase, serviço GATT + código de 6 dígitos no LCD, automático no 1º boot + botão); os dados continuam na nuvem. Implementação na Fase 3b.
 
 ## Pendências e perguntas em aberto
-- **Pi e placa não disponíveis** ainda; validar ambiente (comandos do spec 00 §2) quando chegarem.
+- **Pi e placa não disponíveis** ainda; validar ambiente (comandos do spec 00 §2) e a parte real da 3b (GATT BlueZ, NetworkManager, LCD/botão) quando chegarem (Fase 3b-run).
 - Testes rodam via `.venv` em `dispenser/` (o pytest global do usuário está quebrado: `ModuleNotFoundError`).
-- **Deploy manual pendente no console Firebase**: ler/adotar `app-saude/firestore.rules` (`firebase deploy --only firestore:rules`), criar o usuário Auth do dispensador e o doc `Dispensadores/{uidDispenser} = {usuarioId}` (passos em `docs/firestore-integracao.md`). Até lá o sync real não autentica.
-- Fase 3b (BT/provisionamento): depende de Pi/LCD/botão chegarem e de autorização para alterar a aba Dispositivo no app Flutter.
+- **Deploy manual pendente no console Firebase**: ler/adotar as regras novas (`firebase deploy --only firestore:rules`), criar o usuário Auth do dispensador e anotar o UID na credencial 600 (`{"email","senha","uid"}`) e o doc `Dispensadores/{uidDispenser} = {usuarioId}` (o passo 2 passa a ser feito pelo app no pareamento) — passos em `docs/firestore-integracao.md`. Sem isso o sync real não autentica e o UID do vínculo não existe.
 - Notificação de dose perdida depende de o app estar logado (sem FCM) — avaliar push na Fase 6.
 - Alarmes (2 min, 5x, sem soneca) validar com usuário na Fase 6.
-
-## Próximo passo
-Rodar `/fase 4` (ler `dispenser/docs/spec/02-hardware-protocolo.md`) — requer Pi e placa. Antes, se quiser o vínculo por Bluetooth, chame a **Fase 3b** (desenho já aprovado; precisa autorizar alterações no app).
+- `flutter_blue_plus` 2.x exige `License.nonprofit` no `connect` — reavaliar `License.commercial` se o projeto virar uso comercial.
