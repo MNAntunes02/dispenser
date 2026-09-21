@@ -23,6 +23,27 @@ from core.transporte import TransporteFirestore
 from hardware.bridge.bridge_simulada import PonteSimulada
 
 PADRAO_ESTADO = Path("/var/lib/dispenser/state.db")
+PADRAO_ENV = Path("/var/lib/dispenser/dispenser.env")
+
+
+def _carregar_env_arquivo() -> None:
+    """Sobe para o ambiente as variáveis provisionadas via Bluetooth (Fase 3b).
+
+    O arquivo (permissão 600) contém FIREBASE_PROJECT_ID,
+    DISPENSER_FIREBASE_API_KEY e DISPENSER_USER_ID. Variáveis já presentes no
+    ambiente (SystemdOverride) têm precedência.
+    """
+    caminho = Path(os.environ.get("DISPENSER_ENV_PATH", str(PADRAO_ENV)))
+    try:
+        linhas = caminho.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for linha in linhas:
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        chave, valor = linha.split("=", 1)
+        os.environ.setdefault(chave.strip(), valor.strip())
 
 
 def _agenda_inicial() -> list[dict]:
@@ -72,6 +93,7 @@ def _transporte_de_env() -> dict | None:
 
 
 def main() -> None:
+    _carregar_env_arquivo()
     config = Config.de_env()
     caminho_db = Path(os.environ.get("DISPENSER_DB_PATH", str(PADRAO_ESTADO)))
     db = Database(caminho_db)
