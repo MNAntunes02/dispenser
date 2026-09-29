@@ -1,7 +1,8 @@
-# Integração com Firestore (Fase 3)
+# Integração com Firestore (Fases 3 e 6)
 
-Como o dispensador usa o backend do app: credencial própria, agenda e envio de
-`dose_tomada`. Corresponde à implementação em `core/transporte.py` + `core/sync.py`.
+Como o dispensador usa o backend do app: credencial própria, agenda, envio de
+`dose_tomada` no `Historico` e avisos do cuidador em `Notificacoes`.
+Implementação em `core/transporte.py` + `core/sync.py` + `core/notificador.py`.
 
 ## Fluxo de autenticação (REST)
 
@@ -27,8 +28,33 @@ Resposta decodificada em `list[{id, nome, dosagem, dias[{dia_semana, horario[]}]
 
 - `docId = "h" + sha1(ocorrencia_id)[:20]` → reenvio/retry substitui o mesmo doc (idempotente).
 - `dia`/`horarios` no mesmo formato do app (`medicamentos_do_dia.dart`).
-- Só `dose_tomada` sai nesta fase; `dose_perdida`, `dose_concluida`, retorno etc. ficam na fila
-  até a Fase 6. Sem nomes de medicamento em logs (LGPD).
+- `Historico` é **adesão positiva**: só `dose_tomada` entra. `dose_perdida`,
+  `retorno_pendente` e `falha` vão para `Notificacoes` (abaixo); `dose_concluida`
+  e `gaveta_fora_de_horario` ainda não têm destino no app e ficam na fila.
+- Sem nomes de medicamento em logs (LGPD).
+
+## Avisos do cuidador (Fase 6 — ADR 010)
+
+`PATCH .../UsuarioMedicamento/{PACIENTE}/Notificacoes/{docId}` com
+
+- `docId = "n" + sha1("{ocorrencia_id}|{tipo}")[:20]` — determinístico, então
+  reenvio após queda de energia sobrescreve o mesmo aviso.
+- Campos (todos `stringValue`): `motivo` (`dose_perdida` | `nao_devolvido` |
+  `falha`), `mensagem` (frase pt-BR já renderizada em `core/textos.py`),
+  `dia` (dd/MM/yyyy), `horario_previsto`, `horario_real`, `nome`, `codigo`
+  (só em falha) e `em` (ISO do evento).
+- A subcoleção já está liberada ao dispensador vinculado pelas `firestore.rules`
+  (`UsuarioMedicamento/{userId}/{document=**}`) — **nenhuma regra nova**.
+- Falha de sensor sem dose em andamento também avisa: o doc leva `dia` e
+  `codigo`, sem `nome`/`horario_previsto`.
+- Um aviso por ocorrência: a chave `UNIQUE` da `outbox` (`{ocorrencia_id}|{tipo}`)
+  absorve a duplicidade entre as ações `registrar` e `notificar` da máquina de
+  estados; falha sem dose usa `sem_dose|falha|{codigo}|{dia}`.
+- Offline nada se perde: o aviso fica na `outbox` (SQLite) e sai no próximo ciclo
+  de sync. Sem rede, o fluxo da dose não é afetado.
+- O `app-saude` **não** foi alterado: quando quiser consumir, basta ler
+  `UsuarioMedicamento/{uid}/Notificacoes`. Sem FCM, o aviso só chega com o app
+  aberto (limitação conhecida, `docs/DESCOBERTA.md`).
 
 ## Vínculo app↔dispensador (Fase 3b — Bluetooth)
 

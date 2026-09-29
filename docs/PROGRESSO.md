@@ -3,9 +3,11 @@
 Atualize este arquivo ao final de cada fase. Ele é carregado no início de cada sessão.
 
 ## Estado atual
-- Fase atual: **5 (UI do LCD) concluída** em 2026-09-29, com core real, socket real e
-  transporte FFI real testados ponta a ponta. Falta rodar no Pi (kiosk + tela real).
-- Próximas: Fase 3b-run e Fase 4 (hardware real), ambas dependem do Pi/placa chegarem.
+- Fase atual: **6 (Notificações) concluída** em 2026-09-29: dose perdida, retorno pendente e
+  falha de sensor viram documentos em `Notificacoes` no Firestore, com fila offline e
+  idempotência. O `app-saude` não foi alterado (regra 4).
+- Próximas: Fase 7 (boot/robustez) e Fase 8 (entrega) no papel; Fase 3b-run e Fase 4
+  (hardware real) dependem do Pi/placa chegarem.
 
 ## Fases
 | # | Fase | Status | Aprovada em | Notas |
@@ -17,7 +19,7 @@ Atualize este arquivo ao final de cada fase. Ele é carregado no início de cada
 | 3b | Vínculo BT (onboarding) | concluída | 2026-09-21 | `docs/BLUETOOTH.md`; GATT Pi + provisionador + rede + aba Dispositivo do app; validar no Pi (Fase 3b-run) |
 | 4 | Hardware real | pendente | | depende de Pi/placa |
 | 5 | UI (LCD) | concluída | 2026-09-29 | 19 testes Flutter + 140 Python; ADR 009 |
-| 6 | Notificações | pendente | | |
+| 6 | Notificações | concluída | 2026-09-29 | Avisos em `Notificacoes`; 163 Python; ADR 010 |
 | 7 | Boot e robustez | pendente | | |
 | 8 | Entrega | pendente | | |
 
@@ -47,6 +49,15 @@ UI do LCD (Fase 5, ADR 009 + `docs/PROTOCOLO.md` §2):
 - **Testes**: 19 `flutter test` (18 unit/widget sobre `CanalMemoria` + 1 de integração que sobe `core.demo --sem-mini-ui` e confirma a dose inteira pelo socket FFI real) e 140 pytest. `flutter analyze` limpo. Demo validado ponta a ponta.
 - **Pendências**: rodar no Pi (kiosk, tela real, testar `flutter build linux` — falta toolchain clang/ninja/GTK no snap); goldens visuais não criados; slot ainda `null` (ver HARDWARE.md).
 
+Notificações (Fase 6, ADR 010 + `docs/firestore-integracao.md`):
+- **Escopo aprovado pelo usuário**: só o dispensador escreve; `app-saude` intocado (regra 4) e nenhuma regra nova (a subcoleção já é liberada ao dispensador vinculado).
+- Avisos em `UsuarioMedicamento/{paciente}/Notificacoes` — motivos `dose_perdida`, `nao_devolvido` (limite de 30 min) e `falha` (inclusive sem dose em andamento, com `dia`+`codigo` e sem `nome`). Campos: `motivo`, `mensagem` (pt-BR de `core/textos.py`), `dia` dd/MM/yyyy, `horario_previsto`, `horario_real`, `nome`, `codigo`, `em`.
+- `docId` determinístico `n+sha1({occ}|{tipo})[:20]` → reenvio sobrescreve o mesmo aviso. `Historico` continua **só** dose tomada (o app conta adesão positiva).
+- `core/notificador.py` enfileira na `outbox` (chave `UNIQUE` absorve a duplicidade entre `registrar` e `notificar`; falha sem dose usa `sem_dose|falha|{codigo}|{dia}`); `Sincronizador._TIPOS_AVISO` despacha; offline mantém pendente e não trava o fluxo da dose.
+- `core/transporte.py`: `registro_notificacao` + `doc_notificacao_id` + `gravar_notificacao` (real e fake), escrita por `_gravar` único (retry em 401). `_registrar` passou a carimbar `horario_real` em todos os eventos.
+- **Testes**: +23 em `tests/test_notificacoes.py` (mapeamento, dedup, offline/entrega única, reenvio sem duplicar, falha com e sem dose, dose perdida fora do `Historico`, fluxo feliz sem aviso, transporte REST real com 401/403/sem rede, log sem nome de medicamento — LGPD). Total **163 pytest** verdes.
+- **Não entra nesta fase**: repetir o aviso periodicamente (escalonamento com intervalo — precisa de validação do usuário), FCM/push, e o app consumir `Notificacoes`.
+
 Suposições da Fase 0 (respondidas pelo usuário; detalhes e riscos em `dispenser/docs/DESCOBERTA.md`):
 - Gaveta abre livremente, sem trava; um medicamento por slot; devolução do recipiente inteiro.
 - Não existe firmware de placa; tela LCD HDMI sem touch; sem RTC no Pi (depender de NTP).
@@ -60,6 +71,7 @@ Suposições da Fase 0 (respondidas pelo usuário; detalhes e riscos em `dispens
 - **Pi e placa não disponíveis** ainda; validar ambiente (comandos do spec 00 §2) e a parte real da 3b (GATT BlueZ, NetworkManager, LCD/botão) quando chegarem (Fase 3b-run).
 - Testes rodam via `.venv` em `dispenser/` (o pytest global do usuário está quebrado: `ModuleNotFoundError`).
 - **Regras do Firestore publicadas** em 2026-09-29 (`firebase deploy --only firestore:rules` em `app-saude/`, projeto `app-saude-8fba1`). Sem passo de `firebase init`: o `firebase.json`/`.firebaserc` já existiam. Restam os passos manuais no console: criar o usuário Auth do dispensador e anotar o UID na credencial 600 (`{"email","senha","uid"}`) e o doc `Dispensadores/{uidDispenser} = {usuarioId}` (o passo 2 passa a ser feito pelo app no pareamento) — passos em `docs/firestore-integracao.md`. Sem isso o sync real não autentica e o UID do vínculo não existe.
-- Notificação de dose perdida depende de o app estar logado (sem FCM) — avaliar push na Fase 6.
-- Alarmes (2 min, 5x, sem soneca) validar com usuário na Fase 6.
+- Notificação de dose perdida **já sai para o backend** (Fase 6: `Notificacoes`); falta o app consumir e o **push** para chegar com o app fechado — avaliar FCM como fase seguinte.
+- Alarmes (2 min, 5x, sem soneca) validar com o usuário (pendente das Fases 6/7).
+- Repetir o aviso do cuidador periodicamente (escalonamento): intervalo precisa de validação do usuário; hoje sai **um aviso por ocorrência**.
 - `flutter_blue_plus` 2.x exige `License.nonprofit` no `connect` — reavaliar `License.commercial` se o projeto virar uso comercial.

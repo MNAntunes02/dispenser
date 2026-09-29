@@ -23,6 +23,15 @@ Documentação e estado do projeto: `docs/PROGRESSO.md`, `docs/DESCOBERTA.md`,
   `docs/PROTOCOLO.md`; todo acesso passa por `HardwareBridge` (real e
   simulada).
 
+## Avisos ao cuidador (Fases 3 e 6)
+
+Dose não tomada, medicamento não devolvido e falha de sensor viram documentos
+em `UsuarioMedicamento/{paciente}/Notificacoes` (mensagem em pt-BR, com o
+medicamento, o horário previsto e o motivo). O `Historico` do app continua
+sendo só dose tomada. Os avisos entram numa fila local e saem quando houver
+rede — sem rede, o fluxo da dose continua funcionando. Detalhes em
+`docs/firestore-integracao.md` e `docs/decisoes/010-*.md`.
+
 ## Estrutura
 
 ```

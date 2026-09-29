@@ -42,5 +42,10 @@ sensores e recomputa os timeouts pelo relógio, sem duplicar eventos (fila
 outbox com chave única por ocorrência+tipo).
 
 ## Notificação
-Notificações ao cuidador usam o mecanismo do app; nesta fase são apenas
-registradas localmente (Fase 6 implementa o envio).
+Notificações ao cuidador usam o mecanismo do app: o `Notificador` enfileira o
+aviso na `outbox` e o `Sincronizador` publica em
+`UsuarioMedicamento/{paciente}/Notificacoes` quando houver rede (Fase 6, ADR
+010). Motivos: `dose_perdida` (alarme esgotou), `nao_devolvido` (30 min sem
+devolução) e `falha` (sensor; inclusive sem dose em andamento). Um aviso por
+ocorrência, `docId` determinístico (reenvio não duplica) e fila offline
+preservada. O `Historico` do app continua sendo só dose tomada.
