@@ -65,12 +65,19 @@ Tudo em `app-saude/`. Somente leitura; nada fora de `dispenser/` foi alterado.
 
 ## 2. Ambiente do Raspberry
 
-- **Não há Pi disponível ainda** (usuário confirmou). Ambiente de trabalho atual é a máquina dev (Linux), não o Pi; nada da seção 2 do spec foi executado.
-- Suposições a validar quando o Pi chegar (checklist de comandos do spec 00 §2):
-  - Ubuntu (esperado arm64, `uname -m`), RAM e disco (`free -h`, `df -h /`), `timedatectl`.
-  - Portas seriais (`ls /dev/serial/by-id /dev/ttyUSB* /dev/ttyACM*`) e barramento (`i2cdetect -y 1`) para a placa controladora.
-  - Áudio do alarme (`aplay -l`).
-- Decisões (Q5, Q6): tela LCD **HDMI sem touch** (navegação por botões físicos); **sem RTC** — relógio vem de NTP; sem rede no boot, relógio pode ser inválido e o sistema deve avisar e não disparar (regra de segurança do paciente).
+Ambiente verificado em execução no Pi real (Fase 3b-run, 2026-09-21):
+- **Modelo: Raspberry Pi 3 Model B Rev 1.2** (`/proc/device-tree/model`), 4× Cortex-A53 aarch64.
+- **OS: Debian GNU/Linux 13 (trixie)** — *corrige a suposição inicial de "Ubuntu"*; kernel `6.18.29+rpt-rpi-v8`. Usuário `pi` (uid 1000).
+- RAM **905 MiB** (1 GB), swap 904 MiB; disco: raiz 29 G (13 G livres, 53% usados) em `/dev/mmcblk0p2`.
+- **Relógio**: `timedatectl` OK — timezone `America/Sao_Paulo`, NTP ativo, `System clock synchronized: yes` (sem RTC; parte do NTP no boot). Especial atenção para a regra de relógio inválido (Fase 7).
+- **Bluetooth**: adaptador `hci0` (B8:27:EB:B8:07:90), `Powered: yes`, sem bloqueio (`rfkill`). BlueZ suporta `local-name` nos anúncios — necessário para o `OptiBlister-*`.
+- **Rede**: NetworkManager ativo; `wlan0` conectado (WPA2, SSID de teste "Alisson"); `eth0` unavailable; WiFi/BT sem soft/hard block.
+- **Tela**: HDMI-A-1 **connected** (LCD HDMI sem touch, consistente com Q5).
+- **Áudio**: `aplay -l` → card 0 `bcm2835 Headphones` (jack 3,5 mm) + card 1 `vc4hdmi`. Alarme vai pelo jack inicialmente.
+- **Placa controladora**: **ainda não conectada** — nenhum `/dev/ttyUSB*`, `/dev/ttyACM*`, `/dev/serial/by-id` nem barramento I2C (`i2cdetect -y 1` vazio). Fase 4 fica pendente dela chegar.
+- **Desenvolvimento**: venv do projeto recriado no Pi (Python 3.13.5); 99 testes pytest passando em arm64. Sem Flutter SDK no Pi (app roda em dev/celular).
+
+Decisões (Q5, Q6): tela LCD **HDMI sem touch** (navegação por botões físicos); **sem RTC** — relógio vem de NTP; sem rede no boot, relógio pode ser inválido e o sistema deve avisar e não disparar (regra de segurança do paciente).
 
 ## 3. Placa controladora
 
