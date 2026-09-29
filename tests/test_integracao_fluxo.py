@@ -81,7 +81,8 @@ def test_fluxo_feliz_completo_no_simulador(tmp_path):
         tmp_path, _meds(["08:00"]), inicio=DIA - timedelta(seconds=1)
     )
     coord.tick()  # antes do horário não dispara
-    assert _chaves(pub) == []
+    # a UI já sabe que está tudo em dia e qual é a próxima dose (tela de repouso)
+    assert _chaves(pub) == ["reposo"]
     assert db.ocorrencia_ativa() is None
 
     relogio.avancar(seconds=1)

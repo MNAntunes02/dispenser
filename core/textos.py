@@ -20,7 +20,33 @@ TEXTOS: dict[str, str] = {
     "aviso_retorno_sem_slot": "Medicamento ainda não devolvido. Feche a gaveta.",
     "gaveta_fora_de_horario": "Gaveta aberta fora do horário da dose",
     "falha": "Falha {codigo}. Dose não confirmada.",
+    "falha_sensor": "Falha {codigo} no sensor. Avise o cuidador.",
+    "reposo": "Tudo em dia. Próxima dose às {proxima}",
+    "reposo_sem_dose": "Nenhuma dose programada para hoje",
 }
+
+#: Rótulos fixos que a UI exibe fora do fluxo da dose. Moram aqui (e não na
+#: UI) para existir um único arquivo de textos em pt-BR (regra 9 do AGENTS.md).
+ROTULOS_UI: dict[str, str] = {
+    "pressione_ok": "Pressione OK",
+    "passo": "Passo {atual} de {total}",
+    "reposo": "Aguardando a próxima dose",
+    "proxima_dose": "Próxima dose",
+    "sem_dose_hoje": "Nenhuma dose programada para hoje",
+    "conectando": "Conectando ao dispensador…",
+    "sem_conexao": "Sem conexão com o dispensador",
+    "sem_core_orientacao": (
+        "Tente novamente em instantes. Não tome o medicamento sem a orientação "
+        "do dispensador."
+    ),
+    "dispensador": "Dispensador de medicamentos",
+    "aviso_falha": "Falha no sensor",
+    "slot": "Slot {slot}",
+}
+
+#: Total de passos do fluxo guiado (spec 05).
+TOTAL_PASSOS = 6
+
 
 
 def texto(chave: str, **params: object) -> str:

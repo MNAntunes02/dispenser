@@ -102,9 +102,13 @@ class Database:
 
     # --- ocorrências -------------------------------------------------------
 
-    def inserir_ocorrencia_se_nova(self, occ: Ocorrencia) -> None:
-        """Insere a ocorrência do dia sem sobrescrever estado de uma ativa."""
-        self.conexao.execute(
+    def inserir_ocorrencia_se_nova(self, occ: Ocorrencia) -> bool:
+        """Insere a ocorrência do dia sem sobrescrever estado de uma ativa.
+
+        Devolve `True` apenas quando a linha é nova (usado pela UI para
+        saber se a agenda mudou).
+        """
+        cur = self.conexao.execute(
             """
             INSERT OR IGNORE INTO ocorrencias
                 (id, medicamento, medicamento_nome, dosagem, slot, dia, horario,
@@ -122,6 +126,19 @@ class Database:
             ),
         )
         self.conexao.commit()
+        return cur.rowcount > 0
+
+    def ocorrencias_do_dia(self, dia: str) -> list[dict]:
+        """Todas as ocorrências do dia, na ordem do fluxo (usado pela UI)."""
+        linhas = self.conexao.execute(
+            """
+            SELECT * FROM ocorrencias
+            WHERE dia = ?
+            ORDER BY horario, medicamento
+            """,
+            (dia,),
+        ).fetchall()
+        return [dict(l) for l in linhas]
 
     def obter_ocorrencia(self, ocorrencia_id: str) -> dict | None:
         linha = self.conexao.execute(

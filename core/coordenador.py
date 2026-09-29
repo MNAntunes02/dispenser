@@ -21,8 +21,9 @@ from core.armazenamento import Database
 from core.config import Config
 from core.maquina_estados import Acao, Contexto, Fase, processar
 from core.notificador import Notificador
+from core.protocolo_ui import envelope, passo_de
 from core.sync import SyncService
-from core.textos import texto
+from core.textos import ROTULOS_UI, TOTAL_PASSOS, texto
 from hardware.bridge.hardware_bridge import HardwareBridge
 
 Relogio = Callable[[], datetime]
@@ -39,7 +40,7 @@ class AgendaMemo:
 
 
 class PublicadorLog:
-    """Publicador de tela que apenas acumula mensagens (Fase 5 usa socket)."""
+    """Publicador de tela que apenas acumula mensagens (sem UI conectada)."""
 
     def __init__(self) -> None:
         self.mensagens: list[dict] = []
@@ -61,6 +62,23 @@ _FASES_ATIVAS = {
     Fase.RETORNO_PENDENTE.value,
     Fase.FALHA.value,
 }
+
+#: Fases em que a dose só avança com um "OK" (botão físico ou tecla na UI).
+_FASES_ESPERAM_BOTAO = {Fase.ALARME.value, Fase.MEDICAMENTO_RETIRADO.value}
+
+#: `botao` só confirma a dose quando o id da placa for este. Abridão: evento
+#: sem id (simulador antigo) também confirma.
+_BOTAO_CONFIRMA = "confirma"
+
+#: Telas de repouso: fora do fluxo da dose e sem `passo` (spec 05).
+_CHAVES_REPOSO = ("reposo", "reposo_sem_dose")
+
+
+def _fluxo(chave: str) -> str:
+    """Informa à UI como desenhar: fluxo da dose, repouso ou alerta."""
+    if chave in _CHAVES_REPOSO:
+        return "reposo"
+    return "dose" if passo_de(chave) is not None else "alerta"
 
 
 class Coordenador:
@@ -90,6 +108,12 @@ class Coordenador:
         self._gaveta = False
         self._slots: dict[int, bool] = {}
         self._envio_outbox: Callable[[dict], bool] | None = None
+        self._ultima_tela: dict | None = None
+        self._dia_publicado: str | None = None
+        self._agenda_sujeja = False
+        self._ultimo_alerta: str | None = None
+        self._ui: object | None = None
+        self._retrato_cache: list[dict] = []
 
     # --- ciclo -------------------------------------------------------------
 
@@ -105,15 +129,23 @@ class Coordenador:
         self._ponte.desconectar()
         self._db.fechar()
 
+    def definir_publicador_ui(self, publicador: object) -> None:
+        """Troca o destino das mensagens de tela (socket da UI, no boot)."""
+        self._publicador_ui = publicador
+
     def tick(self) -> None:
         with self._trava:
             self._sincronizar_ocorrencias_do_dia()
+            self._publicar_agenda_se_precisa()
             if self._ativa is None:
                 self._carregar_ativa()
             self._escolher_proxima()
+            self._drenar_ui()
             self._processar_timeouts()
             self._drenar_ponte()
             self._avaliar_retorno()
+            self._publicar_reposo_se_precisa()
+            self._atualizar_retrato()
 
     def definir_envio_outbox(self, envio: Callable[[dict], bool]) -> None:
         self._envio_outbox = envio
@@ -127,8 +159,131 @@ class Coordenador:
 
     def _sincronizar_ocorrencias_do_dia(self) -> None:
         hoje = self._relogio().date()
+        novas = False
         for occ in self._agendador.ocorrencias_do_dia(self._agenda_fonte.agenda(), hoje):
-            self._db.inserir_ocorrencia_se_nova(occ)
+            novas = self._db.inserir_ocorrencia_se_nova(occ) or novas
+        if novas:
+            self._agenda_sujeja = True
+
+    def _publicar_agenda_se_precisa(self) -> None:
+        """Republica a agenda do dia quando ela muda (virada do dia/novas doses)."""
+        hoje = self._relogio().date().isoformat()
+        if self._dia_publicado != hoje or self._agenda_sujeja:
+            self.publicar_agenda()
+
+    # --- interface com a UI --------------------------------------------------
+
+    def _drenar_ui(self) -> None:
+        """Processa a entrada vinda da UI (fila alimentada pelo socket).
+
+        A entrada chega pela fila, nunca direto do socket: assim todo o
+        estado do core — e o banco SQLite — continuam em uma thread só.
+        """
+        if self._ui is None:
+            return
+        for msg in self._ui.entradas():
+            self.entrada_ui(msg)
+
+    def definir_ui(self, ui: object | None) -> None:
+        """Liga/desliga a fonte de mensagens da UI (socket) no boot."""
+        self._ui = ui
+
+    def entrada_ui(self, msg: dict) -> bool:
+        """Trata uma mensagem da UI. A UI só informa intenção; o core decide."""
+        tipo = msg.get("type")
+        if tipo == "input":
+            return self._acao_ui(str(msg.get("acao") or ""))
+        if tipo == "comando":
+            self._db.registrar_log(f"ui_comando:{msg.get('cmd', '')}")
+            return True
+        if tipo == "health":
+            return True
+        return False
+
+    def _acao_ui(self, acao: str) -> bool:
+        with self._trava:
+            if acao != "confirma":
+                # Política aprovada: sem soneca. Qualquer outra ação é ignorada.
+                self._db.registrar_log(f"ui_acao_ignorada:{acao}")
+                return False
+            if self._ativa is None:
+                self._db.registrar_log("ui_confirma_sem_dose")
+                return False
+            self._emitir_para(self._ativa, "ok")
+            return True
+
+    def _publicar_reposo_se_precisa(self) -> None:
+        """Mantém a tela de repouso na UI quando não há dose em andamento.
+
+        Sem isso a UI ficaria em "conectando" para sempre: o core precisa dizer
+        explicitamente que está ocioso e qual é a próxima dose.
+        """
+        if self._ativa is not None:
+            return
+        atual = self._ultima_tela
+        if atual is not None and atual.get("chave") not in _CHAVES_REPOSO:
+            return  # tela de dose/aviso: não sobrescreve nada
+        proxima = self._proxima_dose()
+        chave = "reposo" if proxima else "reposo_sem_dose"
+        if atual is not None and atual.get("chave") == chave and (
+            atual.get("proxima", "") == (proxima or "")
+        ):
+            return  # nada mudou: não repinta a tela
+        self._publicar_tela(
+            "",
+            None,
+            {"chave": chave, "proxima": proxima or ""},
+        )
+
+    def _msg_agenda(self) -> dict:
+        hoje = self._relogio().date().isoformat()
+        return envelope(
+            "agenda",
+            self._relogio,
+            dia=hoje,
+            ocorrencias=[
+                {
+                    "id": o["id"],
+                    "medicamento": o["medicamento_nome"],
+                    "dosagem": o["dosagem"],
+                    "slot": o["slot"],
+                    "horario": o["horario"],
+                    "estado": o["estado"],
+                }
+                for o in self._db.ocorrencias_do_dia(hoje)
+            ],
+        )
+
+    def publicar_agenda(self) -> None:
+        hoje = self._relogio().date().isoformat()
+        self._dia_publicado = hoje
+        self._agenda_sujeja = False
+        self._publicador_ui.publicar(self._msg_agenda())
+
+    def retrato(self) -> list[dict]:
+        """Estado completo para a UI que acabou de (re)conectar."""
+        mensagens = [
+            envelope(
+                "rotulos",
+                self._relogio,
+                rotulos=ROTULOS_UI,
+                totalPassos=TOTAL_PASSOS,
+            )
+        ]
+        mensagens.append(self._msg_agenda())
+        if self._ultima_tela is not None:
+            mensagens.append(self._ultima_tela)
+        return mensagens
+
+    def _atualizar_retrato(self) -> None:
+        """Cache do retrato para a thread do socket nunca tocar o banco."""
+        self._retrato_cache = self.retrato()
+
+    def retrato_cache(self) -> list[dict]:
+        """Retrato pronto (gerado no `tick`), seguro de ler de outra thread."""
+        if not self._retrato_cache:
+            self._retrato_cache = self.retrato()
+        return list(self._retrato_cache)
 
     def _carregar_ativa(self) -> None:
         self._ativa = self._db.ocorrencia_ativa()
@@ -210,7 +365,13 @@ class Coordenador:
             self._slots[slot] = False
             self._emite("slot_ausente", {"slot": slot})
         elif tipo == "botao":
-            self._emite("ok")
+            # Só o botão "confirma" avança a dose: avanca/volta/ajuda da placa
+            # existem para a navegação da tela e não confirmam a tomada.
+            botao = evento.get("id")
+            if botao in (None, _BOTAO_CONFIRMA):
+                self._emite("ok")
+            else:
+                self._db.registrar_log(f"botao_sem_efeito:{botao}")
         elif tipo == "falha":
             self._emite("falha", {"codigo": evento.get("codigo", "F000")})
         else:
@@ -236,6 +397,11 @@ class Coordenador:
         if self._ativa is not None:
             self._emitir_para(self._ativa, evento, dados)
             return
+        if evento == "falha":
+            # Falha com ocioso (ex.: perda de heartbeat da placa) não pode ser
+            # descartada: a tela de repouso precisa avisar (AGENTS.md).
+            self._falha_sem_dose(str((dados or {}).get("codigo") or "F000"))
+            return
         if evento == "gaveta_aberta":
             hoje = self._relogio().date().isoformat()
             base = self._db.proxima_ocorrencia_aguardando(dia=hoje)
@@ -243,6 +409,21 @@ class Coordenador:
                 self._emitir_para(base, evento, dados)
             else:
                 self._db.registrar_log("gaveta_fora_de_horario")
+
+    def _falha_sem_dose(self, codigo: str) -> None:
+        self._db.registrar_log(f"falha_sem_dose:{codigo}")
+        if codigo == self._ultimo_alerta:
+            return  # mesmo alerta repetido: não republisha nem notifica de novo
+        self._ultimo_alerta = codigo
+        self._publicador_ui.publicar(
+            envelope(
+                "alerta",
+                self._relogio,
+                codigo=codigo,
+                mensagem=texto("falha_sensor", codigo=codigo),
+            )
+        )
+        self._notificador.notificar_falha(codigo)
 
     # --- máquina de estados e ações ----------------------------------------
 
@@ -265,7 +446,7 @@ class Coordenador:
             occ_id, estado=nova_fase.value, tentativas=novas_tentativas
         )
         for acao in acoes:
-            self._executar_acao(acao, occ_id)
+            self._executar_acao(acao, occ_id, nova_fase.value)
         nova = self._db.obter_ocorrencia(occ_id)
         self._ativa = nova if nova["estado"] in _FASES_ATIVAS else None
 
@@ -276,7 +457,7 @@ class Coordenador:
             candidatas = [o for o in candidatas if o["id"] != excepto]
         return candidatas[0]["horario"] if candidatas else ""
 
-    def _executar_acao(self, acao: Acao, occ_id: str) -> None:
+    def _executar_acao(self, acao: Acao, occ_id: str, fase: str | None = None) -> None:
         dados = acao.dados
         if acao.tipo == "buzzer":
             self._ponte.buzzer(dados.get("padrao", "dose"))
@@ -289,19 +470,43 @@ class Coordenador:
             slot = dados.get("slot")
             self._ponte.acender_led(-1 if slot is None else int(slot), "off")
         elif acao.tipo == "tela":
-            chave = dados.get("chave")
-            variante = ""
-            if chave in ("retire_medicamento", "devolva_slot", "aviso_retorno") and dados.get("slot") is None:
-                variante = "_sem_slot"
-            elif chave == "tudo_certo" and not dados.get("proxima"):
-                variante = "_fim"
-            params = {k: v for k, v in dados.items() if k != "chave"}
-            mensagem = texto(f"{chave}{variante}", **params)
-            self._publicador_ui.publicar({"tipo": "tela", "chave": chave, "mensagem": mensagem})
+            self._publicar_tela(occ_id, fase, dados)
         elif acao.tipo == "registrar":
             self._registrar(occ_id, dados.get("tipo", ""), dados)
         elif acao.tipo == "notificar":
             self._notificar(occ_id, dados)
+
+    def _publicar_tela(self, occ_id: str, fase: str | None, dados: dict) -> None:
+        """Renderiza a frase em pt-BR e publica o passo para a UI.
+
+        A frase é montada aqui (fonte única `core/textos.py`); a UI exibe
+        `mensagem` como veio e não conhece a máquina de estados.
+        """
+        chave = dados.get("chave")
+        variante = ""
+        if chave in ("retire_medicamento", "devolva_slot", "aviso_retorno") and dados.get("slot") is None:
+            variante = "_sem_slot"
+        elif chave == "tudo_certo" and not dados.get("proxima"):
+            variante = "_fim"
+        params = {k: v for k, v in dados.items() if k != "chave"}
+        mensagem = texto(f"{chave}{variante}", **params)
+        passo = passo_de(chave)
+        msg = envelope(
+            "estado",
+            self._relogio,
+            fase=fase,
+            ocorrenciaId=occ_id,
+            chave=chave,
+            mensagem=mensagem,
+            passo=passo,
+            totalPassos=TOTAL_PASSOS,
+            slot=dados.get("slot"),
+            proxima=dados.get("proxima") or "",
+            esperaBotao=fase in _FASES_ESPERAM_BOTAO,
+            fluxo=_fluxo(chave),
+        )
+        self._ultima_tela = msg
+        self._publicador_ui.publicar(msg)
 
     def _registrar(self, occ_id: str, tipo: str, dados: dict) -> None:
         payload = {"ocorrencia_id": occ_id}
