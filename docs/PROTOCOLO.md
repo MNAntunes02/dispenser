@@ -69,29 +69,69 @@ Formato: `{"v":1,"t":"evento","e":"<evento>", ...}`
 
 ## 2. Comunicação core ↔ UI (Unix socket)
 
-Ref.: ADR 003.
+Ref.: ADR 003 (transporte) e ADR 009 (a UI nunca decide o estado da dose).
 
 ### Transporte
-- Unix domain socket **`/run/dispenser/core.sock`**, permissão **600**, newline-delimited JSON, reconexão automática dos dois lados (UI reconecta ao abrir o socket; core notifica por `health`).
+- Unix domain socket **`/run/dispenser/core.sock`**, permissão **600**, diretório `/run/dispenser` com `700`.
+- **Newline-delimited JSON** (NDJSON): uma mensagem por linha, UTF-8, `
+` como separador, máximo de 65536 bytes por linha.
+- Reconexão automática dos dois lados. A UI reconecta sozinha quando o core cai; o core mantém o fluxo de dose **mesmo sem UI** (a UI é opcional por projeto, ver `dispenser_main.py`).
+- O core envia `health` a cada 2 s. Se a UI parar de recebê-lo por mais de 6 s, mostra "core não responde" em vez de deixar uma tela parada fingindo que a dose está em dia.
+- O `dart:io` do Flutter não expõe AF_UNIX: a UI usa `dart:ffi` (`socket/connect/send/recv/poll`) numa isolate separada — ver `ui/lib/src/canal.dart`.
 
 ### Envelope
-`{"v":1,"type":"<tipo>", "ts":"<ISO-8601 local>", ...}`
+`{"v":1,"type":"<tipo>","ts":"<ISO-8601 local>","<campo>":<valor>,...}`
+
+Campos com valor `null` **não são enviados** (envelope mínimo).
 
 ### Core → UI
+
 | type | Campos | Uso |
 |---|---|---|
-| `agenda` | `ocorrencias:[{id,medicamento,dosagem,slot,horario}]` | Telas de agenda (Fase 5) |
-| `ocorrencia` | `id,medicamento,dosagem,slot,horario,fase` | Início/retomada de guia de dose |
-| `estado` | `fase,ocorrenciaId` | Mudança de fase da máquina de estados |
-| `alerta` | `codigo,mensagem` | Falha/sensor incoerente/relógio inválido |
-| `health` | — | Heartbeat do core |
+| `rotulos` | `rotulos:{<chave>:<texto>}`, `totalPassos` | Textos de domínio + nº de passos; enviado logo na conexão |
+| `agenda` | `dia`, `ocorrencias:[{id,medicamento,dosagem,slot,horario,estado}]` | Próxima dose da tela de repouso |
+| `estado` | `chave,mensagem,passo,totalPassos,fase,ocorrenciaId,slot,proxima,esperaBotao,fluxo` | Tela atual (ver abaixo) |
+| `alerta` | `codigo,mensagem` | Falha de sensor, gaveta fora de horário, retorno pendente |
+| `health` | — | Heartbeat |
+
+#### Mensagem `estado`
+- `mensagem`: **texto pronto**, renderizado no core a partir de `core/textos.py`. A UI não monta nem traduz frase de domínio.
+- `chave`: identificador estável da tela (para testes e depuração).
+- `passo`: 1..6 no fluxo guiado; **ausente** fora dele (repouso/aviso).
+- `totalPassos`: sempre 6.
+- `esperaBotao`: `true` apenas onde a dose só avança com um OK do paciente (`ALARME` e `MEDICAMENTO_RETIRADO`).
+- `fluxo`: `dose` | `reposo` | `alerta` — diz à UI qual moldura desenhar.
+- `slot`: pode não vir (depende do mapeamento do slot, ainda ausente — ver HARDWARE.md).
+
+Exemplo:
+```json
+{"v":1,"type":"estado","ts":"2026-09-29T08:00:00","chave":"tome_e_ok","mensagem":"Tome o medicamento e pressione OK","fase":"MEDICAMENTO_RETIRADO","ocorrenciaId":"med-1|2026-09-29|08:00","passo":4,"totalPassos":6,"slot":3,"proxima":"","esperaBotao":true,"fluxo":"dose"}
+```
 
 ### UI → Core
+
 | type | Campos | Uso |
 |---|---|---|
-| `input` | `acao` (`confirma`/`cancela`/`silenciar`) | Confirmações da tela |
-| `resposta` | `ids:[...]` | Ack de eventos recebidos |
-| `comando` | `cmd,args` | Manual/depuração (ex.: iniciar simulação) |
+| `input` | `acao` — apenas `confirma` | Intenção do paciente. A política aprovada **não tem soneca**: não existe `cancela` nem `silenciar`. |
+| `comando` | `cmd,args` | Manual/depuração (ex.: `simular`) |
 | `health` | — | Heartbeat da UI |
 
-Este conjunto é o contrato base e será extendido conforme Fases 2 e 5 (sempre versionado por `v`).
+A UI **nunca** confirma uma dose sozinha: ela só devolve a intenção. Quem valida é o core, junto com os sensores, no `Coordenador.tick()`.
+
+### Telas e fluxo
+Fluxo guiado de 6 passos (spec 05):
+
+| passo | chave | sensor que avança |
+|---|---|---|
+| 1 | `hora_remedio` | botão OK |
+| 2 | `abra_gaveta` | sensor de gaveta aberta |
+| 3 | `retire_medicamento` | slot sem o medicamento |
+| 4 | `tome_e_ok` | botão OK |
+| 5 | `devolva_slot` |(slot de volta) e gaveta fechada |
+| 6 | `tudo_certo` | — (fim da dose) |
+
+Fora do fluxo, o core publica `reposo` (com `proxima`) ou `reposo_sem_dose`, e `alerta` para falhas. Sem a tela de repouso a UI ficaria em "conectando" para sempre — por isso o core sempre publica uma delas quando está ocioso.
+
+### Reexecução
+- Ao (re)conectar, a UI recebe o retrato completo: `rotulos`, `agenda` e a `estado` atual.
+- O retrato é servido de um cache em memória atualizado no `tick()` — a thread do socket **nunca** toca no SQLite nem na máquina de estados.

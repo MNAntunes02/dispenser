@@ -3,9 +3,9 @@
 Atualize este arquivo ao final de cada fase. Ele é carregado no início de cada sessão.
 
 ## Estado atual
-- Fase atual: 3b (Vínculo/provisionamento via Bluetooth), concluída em 2026-09-21
-  **com fakes/app**; validar parte real (BlueZ/NetworkManager/LCD) quando o Pi chegar.
-- Próximas: Fase 4 (hardware real) e Fase 3b-run (rodar no Pi).
+- Fase atual: **5 (UI do LCD) concluída** em 2026-09-29, com core real, socket real e
+  transporte FFI real testados ponta a ponta. Falta rodar no Pi (kiosk + tela real).
+- Próximas: Fase 3b-run e Fase 4 (hardware real), ambas dependem do Pi/placa chegarem.
 
 ## Fases
 | # | Fase | Status | Aprovada em | Notas |
@@ -15,8 +15,8 @@ Atualize este arquivo ao final de cada fase. Ele é carregado no início de cada
 | 2 | Núcleo | concluída | 2026-09-21 | Máquina pura, agendador, SQLite/outbox, coordenador; ADR 006 |
 | 3 | Sync com backend | concluída | 2026-09-21 | Firestore REST + credencial própria; 99 testes verdes; ADRs 007 e 008 |
 | 3b | Vínculo BT (onboarding) | concluída | 2026-09-21 | `docs/BLUETOOTH.md`; GATT Pi + provisionador + rede + aba Dispositivo do app; validar no Pi (Fase 3b-run) |
-| 4 | Hardware real | pendente | | |
-| 5 | UI (LCD) | pendente | | |
+| 4 | Hardware real | pendente | | depende de Pi/placa |
+| 5 | UI (LCD) | concluída | 2026-09-29 | 19 testes Flutter + 140 Python; ADR 009 |
 | 6 | Notificações | pendente | | |
 | 7 | Boot e robustez | pendente | | |
 | 8 | Entrega | pendente | | |
@@ -39,6 +39,13 @@ Vínculo BT (Fase 3b, ADR 008 implementada + `docs/BLUETOOTH.md`):
 - **Pi**: `core/provisionamento.py` (FSM pura: código 6 dígitos one-time/10 min, validação, net, env 600 via `MontadorChunks`); `core/dispenser_main.py` carrega `/var/lib/dispenser/dispenser.env`; entrypoint `core/provision_main.py` (`dispenser-provision`, `--simulado` sem HW); `rede/rede.py` (`RedeLinux` nmcli→netplan + `RedeSimulada`); `hardware/gatt/` (`ServicoGattSimulado` + `ServicoGattBlueZ` D-Bus — só no Pi); `hardware/tela.py`. `requirements` += `dbus-next`.
 - **App (autorizado)**: `pubspec` += `flutter_blue_plus` (connect exige `License.nonprofit`); `lib/services/dispositivo_ble.dart` (`ParqueamentoBle` + fake, chunking ≤240 B) e `lib/services/vinculo_dispensador.dart` (Firestore `Dispensadores/{uid}` + fake); aba `lib/main/dispositivo.dart` reescrita (não vinculado → escaneando → pareando → vinculado/Reconfigurar/Desvincular); permissões BLE em AndroidManifest e Info.plist; regras `Dispensadores` com leitura restrita ao dono.
 - **Testes**: +30 pytest no Pi (99 no total) e 12 `flutter test` no app; todo o fluxo herméticamente fechado com fakes. **Validar** `ServicoGattBlueZ`, `RedeLinux`, LCD/botão no Pi (Fase 3b-run).
+
+UI do LCD (Fase 5, ADR 009 + `docs/PROTOCOLO.md` §2):
+- **A UI não decide**: o core renderiza a frase em `core/textos.py` e envia pronta em `estado.mensagem`, com `chave`, `passo` (1..6), `totalPassos`, `esperaBotao` e `fluxo` (dose/reposo/alerta). A UI só desenha e devolve `input:confirma`. Sem soneca (ADR 006).
+- **Core**: `ServidorUI(caminho, retrato=…, relogio=…, intervalo_health_s=…)` com fila de entradas, wake-up por evento e `health` de 2 s em evento próprio; `Coordenador.definir_ui/definir_publicador_ui/retrato_cache/tick()` integra a UI sem que a thread do socket toque SQLite/FSM; telas de repouso `reposo`/`reposo_sem_dose` publicadas quando não há dose (sem isso a UI ficaria em "conectando").
+- **UI** (`ui/`): Flutter Linux/arm64, kiosk. `modelo.dart` (contrato tipado), `canal.dart` (**FFI/AF_UNIX** — `dart:io` não expõe AF_UNIX; `socket/connect/send/recv/poll` numa isolate, reconexão automática), `cliente_core.dart` (parsing + watchdog de heartbeat), `controlador.dart` (4 telas), `telas.dart` (alto contraste, `_Encolhe`/`FittedBox`), `tema.dart`, `rotulos.dart` (fallback, paridade testada).
+- **Testes**: 19 `flutter test` (18 unit/widget sobre `CanalMemoria` + 1 de integração que sobe `core.demo --sem-mini-ui` e confirma a dose inteira pelo socket FFI real) e 140 pytest. `flutter analyze` limpo. Demo validado ponta a ponta.
+- **Pendências**: rodar no Pi (kiosk, tela real, testar `flutter build linux` — falta toolchain clang/ninja/GTK no snap); goldens visuais não criados; slot ainda `null` (ver HARDWARE.md).
 
 Suposições da Fase 0 (respondidas pelo usuário; detalhes e riscos em `dispenser/docs/DESCOBERTA.md`):
 - Gaveta abre livremente, sem trava; um medicamento por slot; devolução do recipiente inteiro.
