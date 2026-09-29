@@ -98,9 +98,11 @@ class Coordenador:
         self._agenda_fonte = agenda_fonte
         self._ponte = ponte
         self._sync = sync or SyncService(db)
-        self._notificador = notificador or Notificador(db)
         self._publicador_ui = publicador_ui or PublicadorLog()
         self._relogio = relogio or _relogio_padrao
+        # O notificador compartilha a fila do `sync`: um aviso por ocorrência,
+        # entregue pelo `Sincronizador` (Fase 6, ADR 010).
+        self._notificador = notificador or Notificador(db, self._sync, self._relogio)
         self._agendador = Agendador()
         self._trava = RLock()
         self._fila_ponte: list[dict] = []
@@ -509,10 +511,13 @@ class Coordenador:
         self._publicador_ui.publicar(msg)
 
     def _registrar(self, occ_id: str, tipo: str, dados: dict) -> None:
-        payload = {"ocorrencia_id": occ_id}
-        if tipo == "dose_tomada":
-            payload["horario_real"] = self._relogio().isoformat(timespec="seconds")
-        elif tipo == "falha":
+        payload = {
+            "ocorrencia_id": occ_id,
+            # Momento do evento: o aviso do cuidador (Fase 6) mostra quando
+            # aconteceu, mesmo fora de qualquer dose tomada.
+            "horario_real": self._relogio().isoformat(timespec="seconds"),
+        }
+        if tipo == "falha":
             payload["codigo"] = dados.get("codigo", "?")
         self._sync.enfileirar_evento(occ_id, tipo, payload)
         self._db.registrar_log(f"registrar:{tipo}", occ_id)
@@ -524,4 +529,4 @@ class Coordenador:
         elif motivo == "nao_devolvido":
             self._notificador.notificar_retorno_pendente(occ_id)
         elif motivo == "falha":
-            self._notificador.notificar_falha(dados.get("codigo", "?"))
+            self._notificador.notificar_falha(dados.get("codigo", "?"), occ_id)

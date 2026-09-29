@@ -44,9 +44,16 @@ ROTULOS_UI: dict[str, str] = {
     "slot": "Slot {slot}",
 }
 
+#: Avisos gravados para cuidador/app (Fase 6, ADR 010). São lidos no
+#: backend, não na tela do paciente; mesmo arquivo por causa da regra 9.
+AVISOS_CUIDADOR: dict[str, str] = {
+    "dose_perdida": "Dose não tomada: {nome} ({dosagem}), prevista para {horario}.",
+    "nao_devolvido": "Medicamento não devolvido ao slot: {nome} ({dosagem}), dose das {horario}.",
+    "falha": "Falha {codigo} no sensor do dispensador. Confira a dose manualmente.",
+}
+
 #: Total de passos do fluxo guiado (spec 05).
 TOTAL_PASSOS = 6
-
 
 
 def texto(chave: str, **params: object) -> str:
@@ -54,3 +61,10 @@ def texto(chave: str, **params: object) -> str:
     if chave not in TEXTOS:
         raise KeyError(f"mensagem desconhecida: {chave}")
     return TEXTOS[chave].format(**params)
+
+
+def aviso_cuidador(motivo: str, **params: object) -> str:
+    """Frase pt-BR do aviso que o cuidador recebe no backend (ADR 010)."""
+    if motivo not in AVISOS_CUIDADOR:
+        raise KeyError(f"aviso desconhecido: {motivo}")
+    return AVISOS_CUIDADOR[motivo].format(**params)

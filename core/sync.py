@@ -2,7 +2,8 @@
 
 Estratégia (ADR 005): polling da agenda a cada ~15s; eventos de adesão
 enfileirados em SQLite com idempotência por chave. O transporte real
-(Firestore, Fase 3) fornece a agenda e registra `dose_tomada`; aqui ficam
+(Firestore, Fase 3) fornece a agenda, registra `dose_tomada` no `Historico` e
+(a Fase 6, ADR 010) publica os avisos do cuidador em `Notificacoes`; aqui ficam
 a fila, a fonte local da agenda (cache) e a orquestração do ciclo.
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 import json
 
 from core.armazenamento import Database
-from core.transporte import Transporte, registro_historico
+from core.transporte import Transporte, registro_historico, registro_notificacao
 
 
 class SyncService:
@@ -20,9 +21,20 @@ class SyncService:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    def enfileirar_evento(self, ocorrencia_id: str, tipo: str, payload: dict) -> None:
-        chave = f"{ocorrencia_id}|{tipo}"
-        self._db.enfileirar_outbox(chave, ocorrencia_id, tipo, payload)
+    def enfileirar_evento(
+        self,
+        ocorrencia_id: str,
+        tipo: str,
+        payload: dict,
+        *,
+        chave: str | None = None,
+    ) -> None:
+        """Enfileira um evento. A chave `UNIQUE` garante um item só por
+        ocorrência+tipo (idempotência); `chave` explícita é para eventos sem
+        ocorrência (falha de sensor com ociosidade)."""
+        self._db.enfileirar_outbox(
+            chave or f"{ocorrencia_id}|{tipo}", ocorrencia_id, tipo, payload
+        )
 
     def pendentes(self) -> list[dict]:
         return self._db.outbox_pendentes()
@@ -56,7 +68,11 @@ class FonteAgendaLocal:
 class Sincronizador:
     """Orquestra um ciclo de sync: atualizar agenda + despachar a fila."""
 
-    _TIPOS_ENVIADOS = ("dose_tomada",)
+    #: Eventos que viram registro de adesão no `Historico` (o app só conhece
+    #: dose tomada; dose perdida/nao devolvida vão para `Notificacoes`).
+    _TIPOS_HISTORICO = ("dose_tomada",)
+    #: Eventos que viram aviso para cuidador/app (ADR 010).
+    _TIPOS_AVISO = ("dose_perdida", "retorno_pendente", "falha")
 
     def __init__(
         self,
@@ -78,31 +94,60 @@ class Sincronizador:
         return True
 
     def enviar_pendentes(self) -> int:
-        """Despacha a fila; só tipos desta fase saem; falha mantém pendente."""
+        """Despacha a fila; falha de rede mantém o item pendente."""
         enviados = 0
         for item in self._sync.pendentes():
-            if item["tipo"] not in self._TIPOS_ENVIADOS:
-                continue
+            if item["tipo"] in self._TIPOS_HISTORICO:
+                enviar = self._enviar_tomada
+            elif item["tipo"] in self._TIPOS_AVISO:
+                enviar = self._enviar_aviso
+            else:
+                continue  # evento ainda sem destino no backend
             try:
-                if self._enviar_tomada(item):
+                if enviar(item):
                     self._sync.marca_enviado(item["id"])
                     enviados += 1
             except Exception:
                 continue
         return enviados
 
+    def _payload(self, item: dict) -> dict | None:
+        try:
+            payload = json.loads(item["payload"])
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        payload.setdefault("tipo", item["tipo"])
+        return payload
+
     def _enviar_tomada(self, item: dict) -> bool:
         ocorrencia = self._db.obter_ocorrencia(item["ocorrencia_id"])
         if ocorrencia is None:
             return False
-        try:
-            payload = json.loads(item["payload"])
-        except ValueError:
+        payload = self._payload(item)
+        if payload is None:
             return False
         registro = registro_historico(ocorrencia, payload)
         if registro is None:
             return False
         return self._transporte.gravar_historico(item["ocorrencia_id"], registro)
+
+    def _enviar_aviso(self, item: dict) -> bool:
+        """Aviso do cuidador (ADR 010). Falha sem dose em andamento é o único
+        caso em que a ocorrência não existe."""
+        ocorrencia = self._db.obter_ocorrencia(item["ocorrencia_id"])
+        if ocorrencia is None and item["tipo"] != "falha":
+            return False
+        payload = self._payload(item)
+        if payload is None:
+            return False
+        aviso = registro_notificacao(ocorrencia, payload)
+        if aviso is None:
+            return False
+        return self._transporte.gravar_notificacao(
+            item["ocorrencia_id"], item["tipo"], aviso
+        )
 
     def ciclo(self) -> dict:
         """Um ciclo completo de sincronização (agenda + eventos)."""

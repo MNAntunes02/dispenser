@@ -3,8 +3,9 @@
 Fase 3: credencial própria — usuário dedicado do Firebase Auth (email/senha);
 token obtido por `identitytoolkit` e usado como Bearer no Firestore HTTP v1.
 Lê `Medicamentos` (agenda) e registra `Historico` de `dose_tomada` com docId
-determinístico (reenvio idempotente). Demais tipos de evento continuam na
-fila outbox (tratados na Fase 6). Sem nomes de medicamento em logs (LGPD).
+determinístico (reenvio idempotente). A Fase 6 (ADR 010) soma a gravação de
+avisos em `Notificacoes` (dose perdida, não devolvido, falha). Sem nomes de
+medicamento em logs (LGPD).
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import time
 from datetime import datetime
 
 import requests
+
+from core.textos import aviso_cuidador
 
 _AUTH_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
 _TOKEN_URL = "https://securetoken.googleapis.com/v1/token"
@@ -36,6 +39,25 @@ def doc_historico_id(ocorrencia_id: str) -> str:
     """docId determinístico do Histórico para idempotência em reenvios."""
     dig = hashlib.sha1(ocorrencia_id.encode("utf-8")).hexdigest()[:20]
     return f"h{dig}"
+
+
+#: Tipo de evento da fila (outbox) -> motivo do aviso (ADR 010).
+MOTIVO_AVISO = {
+    "dose_perdida": "dose_perdida",
+    "retorno_pendente": "nao_devolvido",
+    "falha": "falha",
+}
+
+
+def motivo_aviso(tipo: str) -> str | None:
+    """Motivo do aviso de um tipo de evento, ou `None` se não é aviso."""
+    return MOTIVO_AVISO.get(tipo)
+
+
+def doc_notificacao_id(ocorrencia_id: str, tipo: str) -> str:
+    """docId determinístico do aviso: reenvio sobrescreve o mesmo doc."""
+    dig = hashlib.sha1(f"{ocorrencia_id}|{tipo}".encode("utf-8")).hexdigest()[:20]
+    return f"n{dig}"
 
 
 def _dd_mm_aaaa(iso: str) -> str:
@@ -66,6 +88,48 @@ def registro_historico(ocorrencia: dict, payload: dict) -> dict | None:
         "horario_real": horario_real,
         "nome": ocorrencia["medicamento_nome"],
     }
+
+
+def registro_notificacao(ocorrencia: dict | None, payload: dict) -> dict | None:
+    """Monta o doc de aviso do cuidador (Fase 6, ADR 010).
+
+    `ocorrencia` é `None` só na falha de sensor sem dose em andamento: o aviso
+    sai mesmo assim (dia + código), sem nome nem horário. Motivo desconhecido
+    ou aviso de dose sem ocorrência devolvem `None` (não envia).
+    """
+    tipo = str(payload.get("tipo", ""))
+    motivo = motivo_aviso(tipo)
+    if motivo is None:
+        return None
+    if ocorrencia is None and motivo != "falha":
+        return None
+
+    dados: dict[str, str] = {"motivo": motivo}
+    em = _hh_mm(payload.get("horario_real"))
+    if payload.get("horario_real"):
+        dados["em"] = str(payload["horario_real"])
+    if em is not None:
+        dados["horario_real"] = em
+
+    if ocorrencia is not None:
+        dados["dia"] = _dd_mm_aaaa(ocorrencia["dia"])
+        dados["horario_previsto"] = ocorrencia["horario"]
+        dados["nome"] = ocorrencia["medicamento_nome"]
+    elif payload.get("dia"):
+        dados["dia"] = _dd_mm_aaaa(str(payload["dia"]))
+
+    if motivo == "falha":
+        codigo = str(payload.get("codigo") or "?")
+        dados["codigo"] = codigo
+        dados["mensagem"] = aviso_cuidador(motivo, codigo=codigo)
+    else:
+        dados["mensagem"] = aviso_cuidador(
+            motivo,
+            nome=ocorrencia["medicamento_nome"],
+            dosagem=ocorrencia["dosagem"],
+            horario=ocorrencia["horario"],
+        )
+    return dados
 
 
 def _valor(campo: dict) -> object:
@@ -142,6 +206,9 @@ class Transporte:
         raise NotImplementedError
 
     def gravar_historico(self, ocorrencia_id: str, registro: dict) -> bool:
+        raise NotImplementedError
+
+    def gravar_notificacao(self, ocorrencia_id: str, tipo: str, aviso: dict) -> bool:
         raise NotImplementedError
 
 
@@ -267,11 +334,9 @@ class TransporteFirestore(Transporte):
             raise AutenticacaoFalhou("acesso negado aos medicamentos")
         raise ErroTransporte(f"medicamentos: HTTP {resposta.status_code}")
 
-    def gravar_historico(self, ocorrencia_id: str, registro: dict) -> bool:
-        url = (
-            f"{self._base()}/UsuarioMedicamento/{self._usuario_id}/Historico/"
-            f"{doc_historico_id(ocorrencia_id)}"
-        )
+    def _gravar(self, colecao: str, doc_id: str, registro: dict) -> bool:
+        """PATCH idempotente em uma subcoleção do paciente (retry em `401`)."""
+        url = f"{self._base()}/UsuarioMedicamento/{self._usuario_id}/{colecao}/{doc_id}"
         corpo = {"fields": {k: {"stringValue": v} for k, v in registro.items()}}
         resposta = self._pedir(requests.patch, url, json=corpo)
         if resposta.status_code == 401 and self._requisicao():
@@ -280,7 +345,13 @@ class TransporteFirestore(Transporte):
             return True
         if resposta.status_code in (400, 401, 403, 404):
             return False
-        raise ErroTransporte(f"histórico: HTTP {resposta.status_code}")
+        raise ErroTransporte(f"{colecao}: HTTP {resposta.status_code}")
+
+    def gravar_historico(self, ocorrencia_id: str, registro: dict) -> bool:
+        return self._gravar("Historico", doc_historico_id(ocorrencia_id), registro)
+
+    def gravar_notificacao(self, ocorrencia_id: str, tipo: str, aviso: dict) -> bool:
+        return self._gravar("Notificacoes", doc_notificacao_id(ocorrencia_id, tipo), aviso)
 
 
 class TransporteFake(Transporte):
@@ -291,6 +362,7 @@ class TransporteFake(Transporte):
             dict(m) for m in (medicamentos or [])
         ]
         self.historico: dict[str, dict] = {}
+        self.notificacoes: dict[str, dict] = {}
         self.offline = False
 
     def ler_medicamentos(self) -> list[dict]:
@@ -303,4 +375,11 @@ class TransporteFake(Transporte):
             raise ErroTransporte("offline")
         chave = doc_historico_id(ocorrencia_id)
         self.historico[chave] = dict(registro)
+        return True
+
+    def gravar_notificacao(self, ocorrencia_id: str, tipo: str, aviso: dict) -> bool:
+        if self.offline:
+            raise ErroTransporte("offline")
+        chave = doc_notificacao_id(ocorrencia_id, tipo)
+        self.notificacoes[chave] = dict(aviso)
         return True
