@@ -5,6 +5,8 @@
 /// da dose, só exibe o passo e devolve o botão OK.
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'src/canal.dart';
@@ -13,14 +15,29 @@ import 'src/controlador.dart';
 import 'src/telas.dart';
 import 'src/tema.dart';
 
-/// Caminho do socket: o systemd passa por variável de ambiente; o padrão é o
-/// do Pi (`deploy/dispenser-core.service`).
-const String kSocketDoCore =
+/// Caminho do socket, definido na compilação (`--dart-define`).
+///
+/// Existe para o dev (`flutter test`) apontar para um core em outra máquina.
+const String kSocketCompilado =
     String.fromEnvironment('DISPENSER_SOCKET', defaultValue: kSocketPadrao);
 
+/// Caminho efetivo do socket: o ambiente na hora da execução vence.
+///
+/// A unit systemd passa `DISPENSER_SOCKET`; sem esta leitura o instalador
+/// precisaria recompilar a UI sempre que mudasse o caminho — e um caminho
+/// errado faria a tela ficar eternamente em "conectando", sem erro visível.
+String caminhoSocketDoCore() {
+  final doAmbiente = Platform.environment['DISPENSER_SOCKET'];
+  if (doAmbiente != null && doAmbiente.trim().isNotEmpty) {
+    return doAmbiente.trim();
+  }
+  return kSocketCompilado;
+}
+
 void main() {
-  final canal = CanalSocketUnix(kSocketDoCore);
-  final cliente = ClienteCore(canal, caminho: kSocketDoCore);
+  final caminho = caminhoSocketDoCore();
+  final canal = CanalSocketUnix(caminho);
+  final cliente = ClienteCore(canal, caminho: caminho);
   final controlador = ControladorUI(cliente);
   cliente.iniciar();
   controlador.iniciar();

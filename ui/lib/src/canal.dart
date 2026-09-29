@@ -12,11 +12,55 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:isolate';
+import 'dart:math';
 
 import 'package:ffi/ffi.dart';
 
 /// Caminho padrão do socket no Pi.
 const String kSocketPadrao = '/run/dispenser/core.sock';
+
+/// Espera progressiva entre reconexões.
+///
+/// Reconectar a cada 1 s funciona — mas vira martelo no core quando ele está
+/// fora do ar: um core que reiniciou dez vezes transforma cada boot em
+/// tempestade de `connect()`. Aqui a espera dobra a cada falha e só volta ao
+/// mínimo quando o core volta a falar, com jitter para duas telas não caírem
+/// no mesmo instante.
+class Backoff {
+  Backoff({
+    Duration minimo = const Duration(seconds: 1),
+    Duration maximo = const Duration(seconds: 15),
+    this.fator = 2.0,
+    this.jitter = 0.2,
+    Random? aleatorio,
+  })  : _minimoS = minimo.inMilliseconds / 1000,
+        _maximoS = maximo.inMilliseconds / 1000,
+        _aleatorio = aleatorio ?? Random();
+
+  final double _minimoS;
+  final double _maximoS;
+  final double fator;
+  final double jitter;
+  final Random _aleatorio;
+
+  int _tentativas = 0;
+
+  /// Quantas falhas acumuladas desde a última conexão que funcionou.
+  int get tentativas => _tentativas;
+
+  /// Quanto esperar agora (já com jitter) e conta a falha.
+  Duration proxima() {
+    final bruto = _minimoS * pow(fator, _tentativas).toDouble();
+    final teto = bruto > _maximoS ? _maximoS : bruto;
+    _tentativas++;
+    final ruido = 1 + (_aleatorio.nextDouble() * 2 - 1) * jitter;
+    final ms = (teto * ruido * 1000).round();
+    return Duration(milliseconds: ms < 200 ? 200 : (ms > 60000 ? 60000 : ms));
+  }
+
+  /// O core respondeu: a partir de agora a UI volta a tentar rápido.
+  void reiniciar() => _tentativas = 0;
+}
 
 /// Conexão com o core: linhas de entrada, erros e escrita.
 abstract interface class CanalCore {
@@ -38,10 +82,10 @@ abstract interface class CanalCore {
 
 /// Canal real: Unix socket + JSON linhas, com reconexão automática.
 class CanalSocketUnix implements CanalCore {
-  CanalSocketUnix(this._caminho, {this.esperaReconexao = const Duration(seconds: 1)});
+  CanalSocketUnix(this._caminho, {Backoff? backoff}) : _backoff = backoff ?? Backoff();
 
   final String _caminho;
-  final Duration esperaReconexao;
+  final Backoff _backoff;
 
   final _linhas = StreamController<String>.broadcast();
   final _erros = StreamController<Object>.broadcast();
@@ -92,6 +136,9 @@ class CanalSocketUnix implements CanalCore {
       if (mensagem is SendPort) {
         _comandos = mensagem;
       } else if (mensagem is String) {
+        // Uma linha do core prova que a conexão está viva: a próxima falha
+        // recomeça do mínimo, em vez de esperar o teto de 15 s.
+        _backoff.reiniciar();
         _linhas.add(mensagem);
       } else if (mensagem is ErroCanal) {
         _erros.add(mensagem);
@@ -117,7 +164,7 @@ class CanalSocketUnix implements CanalCore {
     _porta?.close();
     _porta = null;
     _tempo?.cancel();
-    _tempo = Timer(esperaReconexao, _conectar);
+    _tempo = Timer(_backoff.proxima(), _conectar);
   }
 }
 
