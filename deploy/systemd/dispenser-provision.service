@@ -1,0 +1,57 @@
+# dispenser-provision.service — pareamento por Bluetooth (Fase 3b/7)
+#
+# Só roda enquanto o aparelho não foi pareado com o app. Assim que o
+# provisionamento escreve /var/lib/dispenser/dispenser.env, a condição falha e
+# esta unit fica inativa para sempre: o core assume a agenda da nuvem.
+#
+# Não exige o core: o pareamento precisa funcionar mesmo com o core fora do ar
+# (primeiro boot, ou core quebrado — o usuário ainda tem de conseguir
+# reprovisionar o aparelho).
+
+[Unit]
+Description=Dispensador de medicamentos - pareamento Bluetooth
+Documentation=file:///opt/dispenser/docs/BLUETOOTH.md
+After=network.target bluetooth.target
+Wants=network.target bluetooth.target
+# Já pareado: nada a fazer.
+ConditionPathExists=!/var/lib/dispenser/dispenser.env
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dispenser-provision
+Restart=on-failure
+# O pareamento espera o paciente por 10 min; o bluetooth pode demorar um pouco.
+RestartSec=10
+TimeoutStartSec=600
+TimeoutStopSec=20
+# Ao terminar (ou falhar), a unit desativa: sem ConditionPathExists, o systemd
+# a considera concluída e não insiste.
+RemainAfterExit=no
+
+User=dispenser
+Group=dispenser
+RuntimeDirectory=dispenser
+WorkingDirectory=/opt/dispenser
+
+Environment=TZ=America/Sao_Paulo
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/dispenser/dispenser.conf
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Rede: precisa do Wi-Fi (netplan) e do GATT do BlueZ.
+ReadWritePaths=/var/lib/dispenser /etc/netplan
+# BlueZ e a placa em /dev/serial/by-id ou /dev/ttyUSB0.
+DeviceAllow=char-ttyUSB rw
+ProtectKernelTunables=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH
+# O pareamento é por senha de 6 dígitos na tela: roda com privilégio de usuário
+# comum, sem root. Se o BlueZ exigir, o instalador adiciona o grupo `bluetooth`.
+
+[Install]
+WantedBy=multi-user.target

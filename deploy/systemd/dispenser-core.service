@@ -1,17 +1,70 @@
-# dispenser-core.service
-# Esboço da Fase 1; configurado e validado na Fase 7 (boot/robustez).
+# dispenser-core.service — núcleo do dispensador (Fase 7, ADR 011)
+#
+# O core é a peça que não pode faltar: alarme, LEDs, sensores, agenda e fila de
+# eventos vivem aqui. Por isso ele sobe antes da rede e não depende dela.
+#
+# Não executa como root. A placa entra por USB serial, então precisa apenas de
+# `dialout`; `gpio` fica para a Fase 4 (se a placa mudar para GPIO) e `audio`
+# para o buzzer via som (hoje o buzzer é comandado pela placa).
 
 [Unit]
-Description=Dispensador de medicamentos - nucleo
+Description=Dispensador de medicamentos - núcleo
+Documentation=file:///opt/dispenser/README.md
+# Rede é desejada, não exigida: sem NTP/internet o core ainda roda com a agenda
+# em cache e avisa que o relógio não é confiável (ADR 012).
 After=network-online.target
 Wants=network-online.target
+# Se a placa for reconectada (USB), o core já está de pé e reage sozinho.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+# Mata o processo se ele não mandar WATCHDOG=1 por 45 s. Com pulso de 15 s,
+# aguentamos dois atrasos antes de considerar o core travado de verdade.
+WatchdogSec=45
 ExecStart=/usr/local/bin/dispenser-core
 Restart=always
-RestartSec=5
-EnvironmentFile=/etc/dispenser/.env
+# 5 s evita laço rápido de falhas; 10 s dá tempo de o cartão remontar.
+RestartSec=10
+# SIGHUP recarrega o provisionamento do app (paired por Bluetooth) sem reiniciar.
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+User=dispenser
+Group=dispenser
+RuntimeDirectory=dispenser
+RuntimeDirectoryMode=0755
+StateDirectory=dispenser
+StateDirectoryMode=0750
+WorkingDirectory=/opt/dispenser
+
+Environment=TZ=America/Sao_Paulo
+Environment=PYTHONUNBUFFERED=1
+# Pacote provisionado (600, fora do git). O instalador cria vazio se faltar.
+EnvironmentFile=-/var/lib/dispenser/dispenser.env
+# Configuração não secreta do instalador.
+EnvironmentFile=-/etc/dispenser/dispenser.conf
+
+# Contenção: o core só escreve em /var/lib/dispenser e fala com a placa.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/dispenser
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# systemctl reload / s-journal: o core não gerencia o próprio serviço.
+SystemCallArchitectures=native
+# AF_UNIX: socket da UI. AF_INET/AF_INET6: HTTPS do sync com o backend.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

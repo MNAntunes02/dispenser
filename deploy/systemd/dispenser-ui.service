@@ -1,16 +1,55 @@
-# dispenser-ui.service
-# Esboço da Fase 1; configurado na Fase 5 (UI) e validado na Fase 7.
+# dispenser-ui.service — interface LCD (Fase 5/7)
+#
+# A UI é auxiliar: desenha o que o core decide e devolve a confirmação do botão.
+# Se ela cai, a dose continua guiando por alarme e LED (ADR 006). Se o core cai,
+# a UI **sobrevive** e reconecta sozinha — por isso `Wants=`, nunca `Requires=`.
 
 [Unit]
 Description=Dispensador de medicamentos - interface LCD
+Documentation=file:///opt/dispenser/docs/PROTOCOLO.md
+# A UI espera o core existir, mas não depende da vida dele: Wants, não Requires.
 After=dispenser-core.service
-Requires=dispenser-core.service
+Wants=dispenser-core.service
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/dispenser-ui
 Restart=always
 RestartSec=5
+# A UI reconecta em backoff quando o core está fora; 15 s de espera para o core
+# voltar evita restartar o Flutter inteiro a cada reinício do core.
+RestartSec=15
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+User=dispenser
+Group=dispenser
+RuntimeDirectory=dispenser
+RuntimeDirectoryMode=0755
+WorkingDirectory=/opt/dispenser
+
+Environment=TZ=America/Sao_Paulo
+Environment=PYTHONUNBUFFERED=1
+# `flock` em /run: um kiosk por aparelho, sem dois Flutter brigando pelo LCD.
+Environment=DISPENSER_KIOSK_TTY=tty1
+EnvironmentFile=-/etc/dispenser/dispenser.conf
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+# Groups: video/input/render = framebuffer e touchscreen; dispenser = socket do core.
+SupplementaryGroups=video input render
+ProtectHome=yes
+# A UI só escreve no seu próprio diretório de runtime.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/dispenser
+# O kiosk precisa do console, do DRM/KMS e do touchscreen.
+PrivateDevices=no
+DeviceAllow=char-drm rw
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

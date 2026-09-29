@@ -1,5 +1,35 @@
-# Regra udev: nome estável para a placa do dispensador (Fase 4/7 ajusta).
-# Local de instalação: /etc/udev/rules.d/99-dispenser-usb.rules
-# Identifique por ID_VENDOR/ID_MODEL reais da placa escolhida.
+# dispenser udev — nome estável para a placa do dispensador.
+# Instalado em /etc/udev/rules.d/99-dispenser-usb.rules
+#
+# O core fala com a placa por /dev/dispenser-board (ver core/dispenser_main e
+# docs/HARDWARE.md). `/dev/ttyUSB0` não serve: a ordem das interfaces muda
+# conforme o reboot, e um core apontando para a porta errada falha em silêncio
+# — o pior jeito de falhar num aparelho que segura a dose de alguém.
+#
+# ------------------------------------------------------------------
+# PREENCHA COM OS IDS REAIS DA SUA PLACA
+# ------------------------------------------------------------------
+# Rode, com a placa conectada:
+#     deploy/udev/detectar-placa.sh
+# e cole a linha gerada abaixo (substituindo os valores). Enquanto os IDs
+# não forem preenchidos, a regra genérica abaixo não casa com nada — o
+# instalador avisa e o aparelho continua funcionando pelo /dev/ttyUSB*,
+# que é exatamente o comportamento de hoje.
+#
+# Placa USB-serial (Arduino/ESP32 com conversor USB):
+#
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
+#   SYMLINK+="dispenser-board", MODE="0660", GROUP="dispenser", TAG+="uaccess"
+#
+# Variação comum (CH340 clones e boards com outro VID/PID): use SYMLINK pelo
+# número de série, que não muda:
+#
+# SUBSYSTEM=="tty", ATTRS{serial}=="*", ENV{ID_SERIAL}=="*", \
+#   SYMLINK+="dispenser-board", MODE="0660", GROUP="dispenser", TAG+="uaccess"
+#
+# Regra de segurança aplicada sempre: o grupo `dispenser` e o modo 0660
+# impedem que qualquer usuário local abra a placa, e `TAG+="uaccess"` dá
+# acesso ao usuário logado no console (útil para diagnosticar no lugar).
 
-SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", SYMLINK+="dispenser-board", MODE="0660", GROUP="dispenser"
+# Placeholder: os ids precisam ser preenchidos (veja o cabeçalho).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="XXXX", ATTRS{idProduct}=="YYYY", SYMLINK+="dispenser-board", MODE="0660", GROUP="dispenser", TAG+="uaccess"
