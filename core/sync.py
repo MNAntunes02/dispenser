@@ -95,18 +95,26 @@ class Sincronizador:
         self._db.substituir_agenda(medicamentos)
         return True
 
+    def enviar_item(self, item: dict) -> bool:
+        """Envia **um** item da fila. `True` = saiu do aparelho.
+
+        Usado tanto pelo `ciclo()` quanto pelo callback do coordenador, que
+        precisa de uma função `item -> bool` para a `outbox` (Fase 7: o core
+        tenta enviar assim que o app termina o pareamento, sem esperar o fim
+        do intervalo de sync).
+        """
+        if item["tipo"] in self._TIPOS_HISTORICO:
+            return self._enviar_tomada(item)
+        if item["tipo"] in self._TIPOS_AVISO:
+            return self._enviar_aviso(item)
+        return False  # evento ainda sem destino no backend
+
     def enviar_pendentes(self) -> int:
         """Despacha a fila; falha de rede mantém o item pendente."""
         enviados = 0
         for item in self._sync.pendentes():
-            if item["tipo"] in self._TIPOS_HISTORICO:
-                enviar = self._enviar_tomada
-            elif item["tipo"] in self._TIPOS_AVISO:
-                enviar = self._enviar_aviso
-            else:
-                continue  # evento ainda sem destino no backend
             try:
-                if enviar(item):
+                if self.enviar_item(item):
                     self._sync.marca_enviado(item["id"])
                     enviados += 1
             except Exception:
