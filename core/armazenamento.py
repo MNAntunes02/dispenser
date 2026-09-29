@@ -2,13 +2,18 @@
 
 Fase 2 define o schema e as operações. Logs NUNCA contêm nomes de
 medicamento (LGPD); a trilha registra apenas tipos de evento + ocorrência.
+
+Fase 7 (ADR 013) cuida do cartão SD: WAL (uma escrita por transação em vez de
+duas), `synchronous=NORMAL` (agrupa o fsync), `busy_timeout` e retenção da
+trilha. A fila `outbox` **nunca** é purgada — é o que garante não perder evento
+na falta de rede.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +29,9 @@ _ESTADOS_ATIVOS = (
     "FALHA",
 )
 
+#: Retenção padrão da trilha local (`log_eventos`).
+RETENCAO_PADRAO_DIAS = 90
+
 
 class Database:
     """Interface do banco SQLite local do dispensador."""
@@ -32,21 +40,47 @@ class Database:
         self,
         caminho: Path | str,
         relogio: Callable[[], datetime] | None = None,
+        retencao_log_dias: int = RETENCAO_PADRAO_DIAS,
     ) -> None:
         self._caminho = Path(caminho)
         self._conn: sqlite3.Connection | None = None
         self._relogio = relogio or datetime.now
+        self._retencao_log_dias = max(0, int(retencao_log_dias))
+        self._ultima_purga: str | None = None
 
     def conectar(self) -> None:
         if self._conn is not None:
             return
         self._caminho.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._caminho)
+        self._conn = sqlite3.connect(self._caminho, timeout=5.0)
         self._conn.row_factory = sqlite3.Row
+        self._ajustar_para_cartao_sd()
         self.criar_schema()
 
+    def _ajustar_para_cartao_sd(self) -> None:
+        """PRAGMAs que importam no cartão SD (spec 04, ADR 013).
+
+        - `journal_mode=WAL`: a transação escreve uma vez, em vez de criar e
+          apagar um journal de rollback por commit;
+        - `synchronous=NORMAL`: com WAL, perde-se no máximo a última transação
+          numa queda de energia (o estado é reconstruído do próprio banco) e
+          para de dar `fsync` a cada commit;
+        - `busy_timeout`: duas tentativas de lock (ex.: diagnóstico lendo o
+          banco) esperam em vez de falhar com "database is locked".
+        """
+        conexao = self.conexao
+        conexao.execute("PRAGMA journal_mode=WAL")
+        conexao.execute("PRAGMA synchronous=NORMAL")
+        conexao.execute("PRAGMA busy_timeout=5000")
+        conexao.execute("PRAGMA foreign_keys=ON")
+
     def fechar(self) -> None:
+        """Fecha o banco consolidando o WAL (uma escrita, não várias)."""
         if self._conn is not None:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                pass
             self._conn.close()
             self._conn = None
 
@@ -212,6 +246,20 @@ class Database:
         )
         self.conexao.commit()
 
+    def marcar_nao_atendida(self, ocorrencia_ids: list[str]) -> None:
+        """Fecha várias ocorrências de uma vez (doses cujo horário passou).
+
+        Um único `commit` para não espalhar escrita no cartão SD (spec 04).
+        """
+        if not ocorrencia_ids:
+            return
+        agora = self._agora()
+        self.conexao.executemany(
+            "UPDATE ocorrencias SET estado = 'NAO_ATENDIDA', atualizado_em = ? WHERE id = ?",
+            [(agora, occ_id) for occ_id in ocorrencia_ids],
+        )
+        self.conexao.commit()
+
     # --- trilha de eventos -------------------------------------------------
 
     def registrar_log(
@@ -228,6 +276,27 @@ class Database:
             "SELECT * FROM log_eventos ORDER BY id DESC LIMIT ?", (limite,)
         ).fetchall()
         return [dict(l) for l in linhas]
+
+    def purgar_logs(self, forcar: bool = False) -> int:
+        """Corta a trilha antiga para o banco não crescer sem teto no SD.
+
+        Roda no máximo uma vez por dia (a data do último corte fica em memória,
+        então reiniciar o core não repete a escrita) e só quando há o que
+        apagar. A fila `outbox` não é tocada: evento pendente é evento que
+        ainda não chegou ao cuidador.
+        """
+        if self._retencao_log_dias <= 0:
+            return 0
+        hoje = self._relogio().date().isoformat()
+        if not forcar and self._ultima_purga == hoje:
+            return 0
+        self._ultima_purga = hoje
+        corte = (self._relogio() - timedelta(days=self._retencao_log_dias)).isoformat(
+            timespec="seconds"
+        )
+        cur = self.conexao.execute("DELETE FROM log_eventos WHERE em < ?", (corte,))
+        self.conexao.commit()
+        return int(cur.rowcount or 0)
 
     # --- outbox ------------------------------------------------------------
 
