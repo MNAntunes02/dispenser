@@ -2,7 +2,11 @@
 
 from core.agendador import Ocorrencia
 from core.sync import FonteAgendaLocal, Sincronizador, SyncService
-from core.transporte import TransporteFake, doc_historico_id
+from core.transporte import (
+    TransporteFake,
+    doc_historico_id,
+    doc_notificacao_id,
+)
 
 MEDS = [
     {
@@ -41,7 +45,7 @@ def test_ciclo_atualiza_agenda_pela_fonte_local(db):
     assert FonteAgendaLocal(db).agenda() == MEDS
 
 
-def test_so_dose_tomada_sai_e_gera_historico_completo(db):
+def test_historico_so_com_dose_tomada_e_aviso_com_dose_perdida(db):
     db.inserir_ocorrencia_se_nova(_ocorrencia())
     sync = SyncService(db)
     sync.enfileirar_evento(
@@ -52,7 +56,7 @@ def test_so_dose_tomada_sai_e_gera_historico_completo(db):
 
     fake = TransporteFake(MEDS)
     resumo = Sincronizador(db, fake).ciclo()
-    assert resumo["enviados"] == 1
+    assert resumo["enviados"] == 2  # tomada (Histórico) + perdida (aviso)
 
     cadeia = doc_historico_id("med1|2026-09-19|08:00")
     assert fake.historico[cadeia] == {
@@ -61,8 +65,10 @@ def test_so_dose_tomada_sai_e_gera_historico_completo(db):
         "horario_real": "08:05",
         "nome": "Paracetamol",
     }
-    restantes = [p["tipo"] for p in db.outbox_pendentes()]
-    assert restantes == ["dose_concluida", "dose_perdida"]
+    # dose perdida vira aviso; dose concluída ainda não tem destino no app
+    aviso = fake.notificacoes[doc_notificacao_id("med1|2026-09-19|08:00", "dose_perdida")]
+    assert aviso["motivo"] == "dose_perdida"
+    assert [p["tipo"] for p in db.outbox_pendentes()] == ["dose_concluida"]
 
 
 def test_sem_horario_real_payload_fica_na_fila(db):
