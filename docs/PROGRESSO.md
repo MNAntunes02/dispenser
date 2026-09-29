@@ -59,7 +59,7 @@ Suposições da Fase 0 (respondidas pelo usuário; detalhes e riscos em `dispens
 ## Pendências e perguntas em aberto
 - **Pi e placa não disponíveis** ainda; validar ambiente (comandos do spec 00 §2) e a parte real da 3b (GATT BlueZ, NetworkManager, LCD/botão) quando chegarem (Fase 3b-run).
 - Testes rodam via `.venv` em `dispenser/` (o pytest global do usuário está quebrado: `ModuleNotFoundError`).
-- **Deploy manual pendente no console Firebase**: ler/adotar as regras novas (`firebase deploy --only firestore:rules`), criar o usuário Auth do dispensador e anotar o UID na credencial 600 (`{"email","senha","uid"}`) e o doc `Dispensadores/{uidDispenser} = {usuarioId}` (o passo 2 passa a ser feito pelo app no pareamento) — passos em `docs/firestore-integracao.md`. Sem isso o sync real não autentica e o UID do vínculo não existe.
+- **Regras do Firestore publicadas** em 2026-09-29 (`firebase deploy --only firestore:rules` em `app-saude/`, projeto `app-saude-8fba1`). Sem passo de `firebase init`: o `firebase.json`/`.firebaserc` já existiam. Restam os passos manuais no console: criar o usuário Auth do dispensador e anotar o UID na credencial 600 (`{"email","senha","uid"}`) e o doc `Dispensadores/{uidDispenser} = {usuarioId}` (o passo 2 passa a ser feito pelo app no pareamento) — passos em `docs/firestore-integracao.md`. Sem isso o sync real não autentica e o UID do vínculo não existe.
 - Notificação de dose perdida depende de o app estar logado (sem FCM) — avaliar push na Fase 6.
 - Alarmes (2 min, 5x, sem soneca) validar com usuário na Fase 6.
 - `flutter_blue_plus` 2.x exige `License.nonprofit` no `connect` — reavaliar `License.commercial` se o projeto virar uso comercial.
