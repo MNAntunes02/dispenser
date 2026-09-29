@@ -21,6 +21,14 @@ TEXTOS: dict[str, str] = {
     "gaveta_fora_de_horario": "Gaveta aberta fora do horário da dose",
     "falha": "Falha {codigo}. Dose não confirmada.",
     "falha_sensor": "Falha {codigo} no sensor. Avise o cuidador.",
+    "relogio_nao_confiavel": (
+        "Relógio sem hora certa. As doses voltam a tocar assim que a hora "
+        "for ajustada."
+    ),
+    "relogio_instavel": (
+        "O relógio mudou de hora. As doses voltam a tocar assim que ele se "
+        "estabilizar."
+    ),
     "reposo": "Tudo em dia. Próxima dose às {proxima}",
     "reposo_sem_dose": "Nenhuma dose programada para hoje",
 }
@@ -50,7 +58,21 @@ AVISOS_CUIDADOR: dict[str, str] = {
     "dose_perdida": "Dose não tomada: {nome} ({dosagem}), prevista para {horario}.",
     "nao_devolvido": "Medicamento não devolvido ao slot: {nome} ({dosagem}), dose das {horario}.",
     "falha": "Falha {codigo} no sensor do dispensador. Confira a dose manualmente.",
+    "relogio": (
+        "Relógio do dispensador incorreto no dia {dia}. Sem lembrete: {doses}. "
+        "Confira o que foi tomado."
+    ),
 }
+
+#: Concordância de "dose" em pt-BR fica aqui (regra 9): as frases acima não
+#: carregam o número para não repetir "1 dose"/"2 doses" em cada texto.
+_DOSE = "1 dose"
+_DOSES = "{n} doses"
+
+
+def plural_doses(n: int) -> str:
+    """'1 dose' ou 'N doses' — usado no aviso de relógio incorreto."""
+    return _DOSE if n == 1 else _DOSES.format(n=n)
 
 #: Total de passos do fluxo guiado (spec 05).
 TOTAL_PASSOS = 6

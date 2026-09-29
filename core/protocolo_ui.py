@@ -48,6 +48,8 @@ PASSO_POR_CHAVE: dict[str, int | None] = {
     "tudo_certo_fim": 6,
     "gaveta_fora_de_horario": None,
     "falha": None,
+    "relogio_nao_confiavel": None,
+    "relogio_instavel": None,
     "reposo": None,
     "reposo_sem_dose": None,
 }
