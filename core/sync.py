@@ -69,10 +69,12 @@ class Sincronizador:
     """Orquestra um ciclo de sync: atualizar agenda + despachar a fila."""
 
     #: Eventos que viram registro de adesão no `Historico` (o app só conhece
-    #: dose tomada; dose perdida/nao devolvida vão para `Notificacoes`).
+    #: dose tomada; dose perdida/nao devolvido/relogio vão para `Notificacoes`).
     _TIPOS_HISTORICO = ("dose_tomada",)
-    #: Eventos que viram aviso para cuidador/app (ADR 010).
-    _TIPOS_AVISO = ("dose_perdida", "retorno_pendente", "falha")
+    #: Eventos que viram aviso para cuidador/app (ADR 010; `relogio` na Fase 7).
+    _TIPOS_AVISO = ("dose_perdida", "retorno_pendente", "falha", "relogio")
+    #: Avisos que descrevem o aparelho e por isso não têm ocorrência no banco.
+    _AVISOS_SEM_OCORRENCIA = ("falha", "relogio")
 
     def __init__(
         self,
@@ -134,10 +136,10 @@ class Sincronizador:
         return self._transporte.gravar_historico(item["ocorrencia_id"], registro)
 
     def _enviar_aviso(self, item: dict) -> bool:
-        """Aviso do cuidador (ADR 010). Falha sem dose em andamento é o único
-        caso em que a ocorrência não existe."""
+        """Aviso do cuidador (ADR 010). Falha de sensor e relógio incorreto são
+        os únicos casos em que a ocorrência não existe."""
         ocorrencia = self._db.obter_ocorrencia(item["ocorrencia_id"])
-        if ocorrencia is None and item["tipo"] != "falha":
+        if ocorrencia is None and item["tipo"] not in self._AVISOS_SEM_OCORRENCIA:
             return False
         payload = self._payload(item)
         if payload is None:

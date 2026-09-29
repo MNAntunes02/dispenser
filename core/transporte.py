@@ -17,7 +17,7 @@ from datetime import datetime
 
 import requests
 
-from core.textos import aviso_cuidador
+from core.textos import aviso_cuidador, plural_doses
 
 _AUTH_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
 _TOKEN_URL = "https://securetoken.googleapis.com/v1/token"
@@ -41,12 +41,18 @@ def doc_historico_id(ocorrencia_id: str) -> str:
     return f"h{dig}"
 
 
-#: Tipo de evento da fila (outbox) -> motivo do aviso (ADR 010).
+#: Tipo de evento da fila (outbox) -> motivo do aviso (ADR 010; `relogio` na
+#: Fase 7, ADR 012).
 MOTIVO_AVISO = {
     "dose_perdida": "dose_perdida",
     "retorno_pendente": "nao_devolvido",
     "falha": "falha",
+    "relogio": "relogio",
 }
+
+#: Avisos que podem sair sem ocorrência no banco: os dois descrevem a
+#: situação do aparelho, não uma dose (Fase 6 e Fase 7).
+_MOTIVOS_SEM_OCORRENCIA = ("falha", "relogio")
 
 
 def motivo_aviso(tipo: str) -> str | None:
@@ -73,6 +79,13 @@ def _hh_mm(valor: object) -> str | None:
         return None
 
 
+def _inteiro(valor: object) -> int:
+    try:
+        return int(valor)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 def registro_historico(ocorrencia: dict, payload: dict) -> dict | None:
     """Monta o doc `Historico` compatível com o app.
 
@@ -93,15 +106,16 @@ def registro_historico(ocorrencia: dict, payload: dict) -> dict | None:
 def registro_notificacao(ocorrencia: dict | None, payload: dict) -> dict | None:
     """Monta o doc de aviso do cuidador (Fase 6, ADR 010).
 
-    `ocorrencia` é `None` só na falha de sensor sem dose em andamento: o aviso
-    sai mesmo assim (dia + código), sem nome nem horário. Motivo desconhecido
-    ou aviso de dose sem ocorrência devolvem `None` (não envia).
+    `ocorrencia` é `None` nos avisos que descrevem o aparelho, não uma dose:
+    falha de sensor com ociosidade e relógio incorreto. Nesses casos o aviso
+    sai com dia (+ código ou contagem) e sem nome nem horário. Motivo
+    desconhecido, ou aviso de dose sem ocorrência, devolvem `None` (não envia).
     """
     tipo = str(payload.get("tipo", ""))
     motivo = motivo_aviso(tipo)
     if motivo is None:
         return None
-    if ocorrencia is None and motivo != "falha":
+    if ocorrencia is None and motivo not in _MOTIVOS_SEM_OCORRENCIA:
         return None
 
     dados: dict[str, str] = {"motivo": motivo}
@@ -122,6 +136,12 @@ def registro_notificacao(ocorrencia: dict | None, payload: dict) -> dict | None:
         codigo = str(payload.get("codigo") or "?")
         dados["codigo"] = codigo
         dados["mensagem"] = aviso_cuidador(motivo, codigo=codigo)
+    elif motivo == "relogio":
+        doses = _inteiro(payload.get("doses"))
+        dados["doses"] = str(doses)
+        dados["mensagem"] = aviso_cuidador(
+            motivo, dia=dados.get("dia", ""), doses=plural_doses(doses)
+        )
     else:
         dados["mensagem"] = aviso_cuidador(
             motivo,

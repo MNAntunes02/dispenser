@@ -1,18 +1,20 @@
 """Coordenador: liga agenda, relógio, ponte e máquina de estados.
 
 Ciclo de um `tick()`:
-1. sincroniza as ocorrências do dia na agenda local;
-2. ativa a ocorrência devida (uma por vez, fila por horário);
-3. verifica timeouts (alarme, gaveta, retorno, limite);
-4. drena eventos da ponte para a máquina;
-5. executa as ações resultantes (buzzer, LED, tela, registrar, notificar).
+1. confere se o relógio é confiável (Fase 7, ADR 012) — sem hora certa, não
+   agenda nem dispara nada e a tela avisa;
+2. sincroniza as ocorrências do dia na agenda local;
+3. ativa a ocorrência devida (uma por vez, fila por horário);
+4. verifica timeouts (alarme, gaveta, retorno, limite);
+5. drena eventos da ponte para a máquina;
+6. executa as ações resultantes (buzzer, LED, tela, registrar, notificar).
 
 Relógio e fonte de agenda são injetáveis para testes e demo.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from threading import RLock
 from typing import Callable
 
@@ -22,6 +24,13 @@ from core.config import Config
 from core.maquina_estados import Acao, Contexto, Fase, processar
 from core.notificador import Notificador
 from core.protocolo_ui import envelope, passo_de
+from core.relogio import (
+    EstadoRelogio,
+    VerificadorRelogio,
+    chave_tela,
+    estado_para_notificacao,
+    ler_data_minima,
+)
 from core.sync import SyncService
 from core.textos import ROTULOS_UI, TOTAL_PASSOS, texto
 from hardware.bridge.hardware_bridge import HardwareBridge
@@ -73,6 +82,23 @@ _BOTAO_CONFIRMA = "confirma"
 #: Telas de repouso: fora do fluxo da dose e sem `passo` (spec 05).
 _CHAVES_REPOSO = ("reposo", "reposo_sem_dose")
 
+#: Telas que o core publica sem ocorrência (alerta). Não são tocadas pelo
+#: `_publicar_reposo_se_precisa`, que só repinta telas de repouso.
+_CHAVES_ALERTA = ("relogio_nao_confiavel", "relogio_instavel")
+
+#: Chave de texto de cada fase da dose, só para **repetir a tela** depois que o
+#: relógio deixou de ser confiável (a decisão continua na máquina de estados;
+#: aqui é apresentação, para o paciente não ficar olhando o aviso de relógio).
+_CHAVE_POR_FASE = {
+    Fase.ALARME.value: "hora_remedio",
+    Fase.AGUARDANDO_GAVETA.value: "abra_gaveta",
+    Fase.GAVETA_ABERTA.value: "retire_medicamento",
+    Fase.MEDICAMENTO_RETIRADO.value: "tome_e_ok",
+    Fase.AGUARDANDO_RETORNO.value: "devolva_slot",
+    Fase.RETORNO_PENDENTE.value: "aviso_retorno",
+    Fase.FALHA.value: "falha",
+}
+
 
 def _fluxo(chave: str) -> str:
     """Informa à UI como desenhar: fluxo da dose, repouso ou alerta."""
@@ -92,6 +118,7 @@ class Coordenador:
         notificador: Notificador | None = None,
         publicador_ui: PublicadorLog | None = None,
         relogio: Relogio | None = None,
+        verificador_relogio: VerificadorRelogio | None = None,
     ) -> None:
         self._config = config
         self._db = db
@@ -104,6 +131,11 @@ class Coordenador:
         # entregue pelo `Sincronizador` (Fase 6, ADR 010).
         self._notificador = notificador or Notificador(db, self._sync, self._relogio)
         self._agendador = Agendador()
+        self._verificador = verificador_relogio or VerificadorRelogio(
+            self._relogio,
+            data_minima=ler_data_minima(config.data_minima),
+            tolerancia_s=config.tolerancia_salto_s,
+        )
         self._trava = RLock()
         self._fila_ponte: list[dict] = []
         self._ativa: dict | None = None
@@ -116,6 +148,9 @@ class Coordenador:
         self._ultimo_alerta: str | None = None
         self._ui: object | None = None
         self._retrato_cache: list[dict] = []
+        self._relogio_confiavel = True
+        self._relogio_tela_publicada = False
+        self._ultimo_codigo: str | None = None
 
     # --- ciclo -------------------------------------------------------------
 
@@ -135,9 +170,29 @@ class Coordenador:
         """Troca o destino das mensagens de tela (socket da UI, no boot)."""
         self._publicador_ui = publicador
 
+    def definir_agenda_fonte(self, fonte: object) -> None:
+        """Troca a fonte da agenda depois do provisionamento (Fase 3b, Fase 7).
+
+        O app pareia por Bluetooth com o core já no ar; quando o arquivo de
+        configuração aparece, o core passa a ler a agenda da nuvem sem reiniciar.
+        A dose em andamento não é tocada — só a fonte das próximas ocorrências.
+        """
+        with self._trava:
+            self._agenda_fonte = fonte
+            self._agenda_sujeja = True
+            self._dia_publicado = None
+
+    @property
+    def fonte_agenda(self) -> object:
+        """Fonte da agenda em uso (testes e diagnóstico no journal)."""
+        return self._agenda_fonte
+
     def tick(self) -> None:
         with self._trava:
+            if not self._relogio_pode_disparar():
+                return
             self._sincronizar_ocorrencias_do_dia()
+            self._marcar_doses_passar()
             self._publicar_agenda_se_precisa()
             if self._ativa is None:
                 self._carregar_ativa()
@@ -148,6 +203,107 @@ class Coordenador:
             self._avaliar_retorno()
             self._publicar_reposo_se_precisa()
             self._atualizar_retrato()
+
+    # --- confiabilidade do relógio (Fase 7, ADR 012) -----------------------
+
+    def _relogio_pode_disparar(self) -> bool:
+        """Confere o relógio antes de qualquer decisão de dose.
+
+        Com hora não confiável o `tick` para inteiro: não sincroniza a agenda,
+        não dispara e não conta timeout. A tela avisa o paciente. Decisão do
+        usuário na Fase 7 — avisar por horário errado é pior que atrasar a dose.
+        """
+        avaliacao = self._verificador.avaliar()
+        if avaliacao.confiavel:
+            if not self._relogio_confiavel:
+                self._ao_confiar_relogio(avaliacao)
+            return True
+
+        if self._relogio_confiavel:  # primeira leitura ruim da sessão
+            self._db.registrar_log(
+                estado_para_notificacao(avaliacao.estado), detalhe=avaliacao.motivo
+            )
+            if self._ativa is not None:
+                # Não deixa o alarme tocar às cegas: sem hora confiável o
+                # paciente não consegue saber a hora, e o barulho infinito
+                # só cansa. A dose em andamento fica parada, sem timeout.
+                self._ponte.buzzer("off")
+        self._relogio_confiavel = False
+        if not self._relogio_tela_publicada:
+            self._publicar_tela("", None, {"chave": chave_tela(avaliacao.estado)})
+            self._relogio_tela_publicada = True
+        self._atualizar_retrato()
+        return False
+
+    def _ao_confiar_relogio(self, avaliacao) -> None:
+        """O horário voltou a valer: retoma o fluxo e fecha a janela perdida."""
+        self._db.registrar_log("relogio_confiavel")
+        self._relogio_confiavel = True
+        self._relogio_tela_publicada = False
+        self._sincronizar_ocorrencias_do_dia()
+        perdidas = self._marcar_doses_passar()
+        if perdidas:
+            # Um aviso por indisponibilidade, não um por dose: 3 dias sem NTP
+            # não podem virar dezenas de avisos para o cuidador.
+            self._notificador.notificar_relogio(
+                len(perdidas), inicio=avaliacao.inicio, durou_s=avaliacao.durou_s
+            )
+        if self._ativa is not None:
+            # O paciente não ouviu nada na janela: os temporizadores recomeçam
+            # agora em vez de estourar retroativamente por causa do relógio.
+            self._db.atualizar_ocorrencia(self._ativa["id"])
+        self._republicar_tela()
+
+    def _republicar_tela(self) -> None:
+        """Repinta a tela depois do aviso de relógio (só apresentação).
+
+        A máquina de estados não mudou nada; sem isto o paciente ficaria olhando
+        o aviso de relógio mesmo com a hora corrigida.
+        """
+        ativa = self._ativa
+        chave = _CHAVE_POR_FASE.get(ativa["estado"]) if ativa is not None else None
+        if chave is None:
+            if ativa is not None and ativa["estado"] == Fase.FALHA.value:
+                if not self._ultimo_codigo:
+                    # Sem o código original (ex.: reinício dentro de FALHA) não
+                    # inventamos número de falha: registra e segue.
+                    self._db.registrar_log("tela_nao_republicada:FALHA")
+            self._ultima_tela = None
+            return
+        dados: dict = {
+            "chave": chave,
+            "slot": ativa["slot"],
+            "nome": ativa["medicamento_nome"],
+            "dosagem": ativa["dosagem"],
+            "proxima": self._proxima_dose(excepto=ativa["id"]),
+        }
+        if chave == "falha":
+            dados["codigo"] = self._ultimo_codigo or "?"
+        self._publicar_tela(ativa["id"], ativa["estado"], dados)
+
+    def _marcar_doses_passar(self) -> list[str]:
+        """Fecha as doses cujo horário passou além da janela de atraso.
+
+        Disparar em fila doses de horas atrás não ajuda ninguém e ainda toca
+        alarme num horário que o paciente não reconhece. A ocorrência vai para
+        `NAO_ATENDIDA` por persistence (a máquina de estados não roda: aqui o
+        registro é o de "não houve lembrete") e o cuidadoor recebe um aviso
+        agregado quando a causa foi o relógio (ADR 012).
+        """
+        hoje = self._relogio().date().isoformat()
+        agora = self._relogio()
+        janela = timedelta(seconds=self._config.janela_atraso_s)
+        perdidas: list[str] = []
+        for occ in self._db.proximas_ocorrencias_aguardando(dia=hoje):
+            hh, mm = (int(p) for p in occ["horario"].split(":"))
+            agendada = datetime.combine(date.fromisoformat(occ["dia"]), time(hh, mm))
+            if agendada + janela < agora:
+                perdidas.append(occ["id"])
+        if perdidas:
+            self._db.marcar_nao_atendida(perdidas)
+            # Sem nome de medicamento no log (LGPD).
+            self._db.registrar_log("doses_passadas", detalhe=str(len(perdidas)))
+        return perdidas
 
     def definir_envio_outbox(self, envio: Callable[[dict], bool]) -> None:
         self._envio_outbox = envio
@@ -375,7 +531,9 @@ class Coordenador:
             else:
                 self._db.registrar_log(f"botao_sem_efeito:{botao}")
         elif tipo == "falha":
-            self._emite("falha", {"codigo": evento.get("codigo", "F000")})
+            codigo = str(evento.get("codigo") or "F000")
+            self._ultimo_codigo = codigo
+            self._emite("falha", {"codigo": codigo})
         else:
             self._db.registrar_log(f"evento_ignorado:{tipo}")
 
@@ -417,6 +575,7 @@ class Coordenador:
         if codigo == self._ultimo_alerta:
             return  # mesmo alerta repetido: não republisha nem notifica de novo
         self._ultimo_alerta = codigo
+        self._ultimo_codigo = codigo
         self._publicador_ui.publicar(
             envelope(
                 "alerta",

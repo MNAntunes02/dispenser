@@ -64,6 +64,41 @@ class Notificador:
             )
         self._db.registrar_log("notificar_falha", detalhe=f"{codigo} {info}".strip())
 
+    def notificar_relogio(
+        self,
+        doses: int,
+        *,
+        inicio: datetime | None = None,
+        durou_s: float = 0.0,
+    ) -> None:
+        """Relógio incorreto: **um** aviso por indisponibilidade (ADR 012).
+
+        Não é um aviso por dose perdida — se o Pi ficar dias sem NTP, o
+        cuidador recebe uma mensagem dizendo quantas doses ficaram sem lembrete
+        em vez de dezenas de avisos. A chave inclui o dia, então uma segunda
+        janela no mesmo dia não vira aviso novo (e o reenvio é idempotente).
+        """
+        doses = max(0, int(doses))
+        agora = self._relogio()
+        dia = agora.date().isoformat()
+        payload: dict = {
+            "dia": dia,
+            "doses": doses,
+            "horario_real": agora.isoformat(timespec="seconds"),
+        }
+        if inicio is not None:
+            payload["inicio"] = inicio.isoformat(timespec="seconds")
+        if durou_s > 0:
+            payload["durou_s"] = int(duru_s)
+        self._sync.enfileirar_evento(
+            f"relogio|{dia}",
+            "relogio",
+            payload,
+            chave=f"sem_dose|relogio|{dia}",
+        )
+        # Sem nome de medicamento no log (LGPD).
+        self._db.registrar_log("notificar_relogio", detalhe=f"doses={doses}")
+
     def _enfileirar(
         self, ocorrencia_id: str, tipo: str, payload: dict | None = None
     ) -> None:
