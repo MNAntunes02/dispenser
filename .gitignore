@@ -15,6 +15,9 @@ ui/.dart_tool/
 *.env
 DISPENSER_CREDENTIALS_PATH
 google-services.json
+google-service.json
+*-firebase-adminsdk-*.json
+config/*credencial*.json
 *.pem
 *.key
 *.jwt
