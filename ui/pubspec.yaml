@@ -31,6 +31,10 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # dart:io não expõe AF_UNIX; o cliente do core usa dart:ffi (ver
+  # lib/src/canal.dart) e precisa de alocação fora do heap gerenciado.
+  ffi: ^2.1.0
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
