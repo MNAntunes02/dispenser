@@ -71,6 +71,10 @@ Map<String, Object?> kTela({
   if (proxima.isNotEmpty) 'proxima': proxima,
 };
 
+/// PNG 1×1 válido: o `Image.memory` do preview precisa de bytes decodificáveis.
+const String kPng1x1 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 /// Monta cliente + controlador prontos para o roteiro.
 ({ClienteCoreFake cliente, ControladorUI controlador}) _ligado({DetectorConsumo? detector}) {
   final memoria = CanalMemoria();
@@ -365,12 +369,47 @@ void main() {
       await encerrar(tester, l.cliente);
     });
 
+    testWidgets('passo 4 mostra o preview da câmera e mantém o botão OK', (tester) async {
+      final detector = DetectorConsumoFake();
+      final l = _ligado(detector: detector);
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(kRepouso());
+      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      await tester.pump();
+
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      await tester.pump();
+
+      // Antes do primeiro frame: marcador de câmera, sem inventar instrução.
+      expect(find.byType(Image), findsNothing);
+      expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
+      expect(find.text('Pressione OK'), findsOneWidget);
+
+      detector.emitirQuadro(base64Decode(kPng1x1));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.text('Pressione OK'), findsOneWidget);
+
+      // Ao sair do passo 4 o preview some junto com a câmera.
+      l.cliente.receberMensagem(kTela(chave: 'devolva_slot', mensagem: 'Coloque de volta no slot 3', fase: 'AGUARDANDO_RETORNO', passo: 5, slot: 3));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(Image), findsNothing);
+      expect(find.byIcon(Icons.photo_camera_outlined), findsNothing);
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
     testWidgets('sem conexão avisa e não mostra botão', (tester) async {
       final l = _ligado();
       await tester.pumpWidget(DispenserApp(controlador: l.controlador));
       await tester.pump();
 
-      expect(find.text('Sem conexão...'), findsWidgets);
+      expect(find.text('Sem conexão com o core'), findsWidgets);
       expect(find.text('Pressione OK'), findsNothing);
       expect(find.byIcon(Icons.wifi_off), findsOneWidget);
       l.controlador.dispose();

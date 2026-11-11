@@ -45,11 +45,17 @@ ReadWritePaths=/var/lib/dispenser
 # O kiosk precisa do console, do DRM/KMS e do touchscreen.
 PrivateDevices=no
 DeviceAllow=char-drm rw
+# Câmera da detecção de consumo (passo 4, ADR 016): /dev/video* e /dev/media*.
+# `DeviceAllow` implica DevicePolicy=closed; sem estas linhas o libcamera não
+# abre a câmera. Se o pipeline exigir buffers dma_heap, valide no Pi.
+DeviceAllow=char-video rw
+DeviceAllow=char-media rw
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK: o libcamera/udev enumera dispositivos por netlink.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

@@ -1,4 +1,5 @@
 import argparse
+import base64
 import time
 from pathlib import Path
 
@@ -44,11 +45,11 @@ def ganhos_awb(texto):
     return vermelho, azul
 
 
-def criar_camera(largura, altura, fps, awb, awb_gains):
+def criar_camera(largura, altura, fps, awb, awb_gains, camera_num=0):
     if not Picamera2.global_camera_info():
         raise RuntimeError("Nenhuma camera encontrada pelo libcamera")
 
-    camera = Picamera2()
+    camera = Picamera2(camera_num=camera_num)
     config = camera.create_video_configuration(
         main={"size": (largura, altura), "format": "RGB888"},
         buffer_count=2,
@@ -68,9 +69,9 @@ def criar_camera(largura, altura, fps, awb, awb_gains):
 
 
 def capturar(camera):
-    #frame_rgb = camera.capture_array("main")
-    #return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-    return camera.capture_array("main")
+    # A câmera entrega RGB888; o YOLO e as cores do overlay (CORES) usam BGR.
+    frame_rgb = camera.capture_array("main")
+    return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
 
 def carregar_modelo(caminho):
@@ -180,6 +181,27 @@ def desenhar(frame, deteccoes, nomes):
     return contagem
 
 
+def quadro_jpeg(frame, deteccoes, nomes, largura):
+    """JPEG anotado em base64 para o preview da UI (passo 4).
+
+    Desenha as caixas sobre uma cópia (o frame original continua valendo para
+    a próxima inferência), reduz para `largura` e comprime com qualidade 70 —
+    o suficiente para a tela e barato o bastante para o socket do Pi.
+    """
+    anotado = frame.copy()
+    desenhar(anotado, deteccoes, nomes)
+
+    altura_atual, largura_atual = anotado.shape[:2]
+    if largura > 0 and largura_atual > largura:
+        altura = max(2, int(altura_atual * largura / largura_atual))
+        anotado = cv2.resize(anotado, (largura, altura), interpolation=cv2.INTER_AREA)
+
+    ok, buffer = cv2.imencode(".jpg", anotado, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if not ok:
+        return None
+    return base64.b64encode(buffer.tobytes()).decode("ascii")
+
+
 def resumo_deteccoes(deteccoes, nomes):
     if not deteccoes:
         return "nada detectado"
@@ -244,15 +266,18 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
         args.fps_camera,
         args.awb,
         args.awbgains,
+        args.camera,
     )
     print(
-        f"camera: {args.largura}x{args.altura} | "
+        f"camera: {args.camera} {args.largura}x{args.altura} | "
         f"inferencia: {infer_largura}x{infer_altura} @ {args.imgsz} | "
         f"awb: {args.awb} ({args.awbgains})"
     )
 
     contador_salvos = 0
     contador_frames = 0
+    ultimo_preview = 0.0
+    intervalo_preview = 1.0 / args.preview_fps if args.preview_fps > 0 else 0.0
     try:
         while True:
             frame = capturar(camera)
@@ -267,11 +292,23 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
             )
             if args.ndjson:
                 # Contrato com a UI (ui/lib/src/visao.dart): uma linha por
-                # frame, sem janela. A UI aplica a regra de estabilidade.
+                # frame, sem janela. A UI aplica a regra de estabilidade e
+                # mostra o `frame` (quando pedido) como preview ao vivo.
                 contagem = contar_classes(
                     deteccoes, lambda classe_id: nome_da_classe(nomes, classe_id)
                 )
-                print(linha_ndjson(contagem), flush=True)
+                quadro = None
+                if args.preview:
+                    agora = time.monotonic()
+                    if (
+                        intervalo_preview <= 0
+                        or agora - ultimo_preview >= intervalo_preview
+                    ):
+                        ultimo_preview = agora
+                        quadro = quadro_jpeg(
+                            frame, deteccoes, nomes, args.preview_largura
+                        )
+                print(linha_ndjson(contagem, quadro), flush=True)
                 contador_frames += 1
                 if args.max_frames and contador_frames >= args.max_frames:
                     break
@@ -351,6 +388,7 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--modelo", default="best_ncnn_model")
+    parser.add_argument("--camera", type=int, default=0, help="número da câmera (libcamera)")
     parser.add_argument("--imgsz", type=int, default=800)
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument("--largura", type=int, default=3280)
@@ -376,6 +414,24 @@ def main():
         action="store_true",
         help="imprime uma linha JSON por frame ({'pill':N,'no_pill':M}) "
         "no stdout, sem janela — consumido pela UI (detecção de consumo)",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="inclui no NDJSON um JPEG anotado em base64 (chave 'frame') "
+        "para o preview ao vivo da UI",
+    )
+    parser.add_argument(
+        "--preview-fps",
+        type=float,
+        default=5.0,
+        help="quadros de preview por segundo (0 = todo frame)",
+    )
+    parser.add_argument(
+        "--preview-largura",
+        type=int,
+        default=800,
+        help="largura do JPEG de preview em pixels (0 = sem redução)",
     )
     parser.add_argument("--salvar-dir", default="")
     parser.add_argument("--salvar-intervalo", type=int, default=0)

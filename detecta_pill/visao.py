@@ -9,6 +9,11 @@ Contrato com a UI: uma linha JSON por frame processado, sempre com as chaves
 
     {"pill": 3, "no_pill": 1}
 
+Com `--preview`, a linha ganha a chave `frame`: um JPEG anotado (caixas
+desenhadas) em base64, usado pela UI para o preview ao vivo do passo 4:
+
+    {"pill": 3, "no_pill": 1, "frame": "/9j/4AAQ..."}
+
 A UI confirma o consumo (passo 4) quando a mesma leitura se repete por N
 frames e há ao menos um `pill` — ver `ui/lib/src/visao.dart`.
 """
@@ -41,12 +46,17 @@ def contar_classes(
     return contagem
 
 
-def linha_ndjson(contagem: dict[str, int]) -> str:
+def linha_ndjson(contagem: dict[str, int], quadro: str | None = None) -> str:
     """Serializa a contagem em uma linha NDJSON (contrato com a UI).
 
     Garante as duas chaves mesmo quando a detecção não trouxe nenhuma classe
     (a UI usa isso para exigir ao menos um comprimido e não confirmar com a
     câmera ligada sem ler cartela).
+
+    `quadro` é o JPEG anotado já codificado em base64. A chave `frame` só
+    aparece quando há quadro — o parser da UI aceita as duas formas.
     """
     linha = {classe: int(contagem.get(classe, 0)) for classe in CLASSES}
+    if quadro:
+        linha["frame"] = quadro
     return json.dumps(linha, ensure_ascii=False)

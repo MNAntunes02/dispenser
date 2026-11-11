@@ -1,0 +1,9 @@
+# Dependências da detecção de consumo (passo 4, ADR 016).
+#
+# Instaladas num venv próprio (`detecta_pill/.venv`, criado com
+# `--system-site-packages`) porque `picamera2` vem do apt
+# (`python3-picamera2`) e o PyTorch/Ultralytics pesam demais para o venv do
+# core. `opencv-python-headless` evita depender de X11 no kiosk.
+ultralytics>=8.3
+opencv-python-headless>=4.9
+torch>=2.2

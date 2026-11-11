@@ -3,7 +3,9 @@
 @TestOn('vm')
 library;
 
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dispenser_ui/src/visao.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,6 +71,32 @@ void main() {
       expect(leituraDeLinha('{"pill": 3, "no_pill": 1}'), const Leitura(3, 1));
     });
 
+    test('lê o frame do preview em base64', () {
+      final jpeg = Uint8List.fromList(<int>[0xFF, 0xD8, 0xFF, 0xD9]);
+      final linha = jsonEncode({'pill': 2, 'no_pill': 1, 'frame': base64Encode(jpeg)});
+
+      final leitura = leituraDeLinha(linha)!;
+
+      expect(leitura.pill, 2);
+      expect(leitura.noPill, 1);
+      expect(leitura.quadro, jpeg);
+    });
+
+    test('frame inválido não invalida a contagem', () {
+      final leitura = leituraDeLinha('{"pill": 1, "no_pill": 0, "frame": "não é base64"}')!;
+
+      expect(leitura.pill, 1);
+      expect(leitura.noPill, 0);
+      expect(leitura.quadro, isNull);
+    });
+
+    test('o frame não entra na igualdade da leitura', () {
+      final jpeg = Uint8List.fromList(<int>[1, 2, 3]);
+
+      expect(const Leitura(2, 1, quadro: null), Leitura(2, 1, quadro: jpeg));
+      expect(const Leitura(2, 1).hashCode, Leitura(2, 1, quadro: jpeg).hashCode);
+    });
+
     test('ignora linhas inválidas', () {
       expect(leituraDeLinha(''), isNull);
       expect(leituraDeLinha('não é json'), isNull);
@@ -85,6 +113,8 @@ void main() {
       expect(config.frames, 30);
       expect(config.minPilulas, 1);
       expect(config.python, 'python3');
+      expect(config.preview, isTrue);
+      expect(config.previewFps, 5);
     });
 
     test('liga quando há script e lê os valores', () {
@@ -96,6 +126,8 @@ void main() {
         'DISPENSER_VISAO_CONF': '0.7',
         'DISPENSER_VISAO_FRAMES': '10',
         'DISPENSER_VISAO_MIN_PILL': '2',
+        'DISPENSER_VISAO_PREVIEW': '0',
+        'DISPENSER_VISAO_PREVIEW_FPS': '2',
       });
       expect(config.ativo, isTrue);
       expect(config.python, '/opt/venv/bin/python');
@@ -104,6 +136,8 @@ void main() {
       expect(config.conf, 0.7);
       expect(config.frames, 10);
       expect(config.minPilulas, 2);
+      expect(config.preview, isFalse);
+      expect(config.previewFps, 2);
     });
 
     test('DISPENSER_VISAO_ATIVA=0 desliga mesmo com script', () {
@@ -124,6 +158,22 @@ void main() {
       detector.parar();
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(confirmacoes, isEmpty);
+      await sub.cancel();
+      await detector.dispose();
+    });
+  });
+
+  group('DetectorConsumoFake', () {
+    test('emite os quadros do preview', () async {
+      final detector = DetectorConsumoFake();
+      final quadros = <Uint8List>[];
+      final sub = detector.quadros.listen(quadros.add);
+      final jpeg = Uint8List.fromList(<int>[0xFF, 0xD8, 0xFF, 0xD9]);
+
+      detector.emitirQuadro(jpeg);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(quadros, [jpeg]);
       await sub.cancel();
       await detector.dispose();
     });
@@ -158,6 +208,80 @@ void main() {
       await sub.cancel();
       await detector.dispose();
       gerador.parent.deleteSync(recursive: true);
+    });
+
+    test('emite o frame do preview junto da leitura', () async {
+      final jpeg = base64Encode(<int>[0xFF, 0xD8, 0xFF, 0xD9]);
+      final gerador = _executavel(
+        '#!/bin/sh\n'
+        'echo \'{"pill": 1, "no_pill": 0, "frame": "$jpeg"}\'\n'
+        'sleep 0.2\n',
+      );
+      final config = ConfiguracaoVisao(
+        ativo: true,
+        python: gerador.path,
+        script: 'ignorado',
+        modelo: 'm',
+        camera: 0,
+        conf: 0.5,
+        frames: 30,
+        minPilulas: 1,
+      );
+      final detector = DetectorConsumoProcesso(config);
+      final quadros = <Uint8List>[];
+      final sub = detector.quadros.listen(quadros.add);
+      detector.iniciar();
+      await _esperar(() => quadros.isNotEmpty, porque: 'o frame do preview');
+      expect(quadros.first, <int>[0xFF, 0xD8, 0xFF, 0xD9]);
+      await sub.cancel();
+      await detector.dispose();
+      gerador.parent.deleteSync(recursive: true);
+    });
+
+    test('passa os argumentos do contrato (câmera e preview) ao script', () async {
+      final dir = Directory.systemTemp.createTempSync('visao');
+      final args = File('${dir.path}/args.txt');
+      final gerador = File('${dir.path}/gerador.sh')
+        ..writeAsStringSync(
+          '#!/bin/sh\n'
+          'printf "%s\\n" "\$@" > "${args.path}"\n'
+          'echo \'{"pill": 1, "no_pill": 0}\'\n'
+          'sleep 0.2\n',
+        );
+      Process.runSync('chmod', ['+x', gerador.path]);
+
+      final config = ConfiguracaoVisao(
+        ativo: true,
+        python: gerador.path,
+        script: 'ignorado',
+        modelo: 'best_ncnn_model',
+        camera: 1,
+        conf: 0.5,
+        frames: 30,
+        minPilulas: 1,
+        previewFps: 2,
+      );
+      final detector = DetectorConsumoProcesso(config);
+      detector.iniciar();
+      await _esperar(
+        () => args.existsSync() && args.readAsLinesSync().length >= 10,
+        porque: 'os argumentos do script',
+      );
+      final linhas = args.readAsStringSync().trim().split('\n');
+      expect(linhas, containsAllInOrder(<String>[
+        '--modelo',
+        'best_ncnn_model',
+        '--camera',
+        '1',
+        '--conf',
+        '0.5',
+        '--ndjson',
+        '--preview',
+        '--preview-fps',
+        '2.0',
+      ]));
+      await detector.dispose();
+      dir.deleteSync(recursive: true);
     });
 
     test('não confirma quando as leituras variam', () async {

@@ -2,7 +2,7 @@
 /// o estado da dose.
 library;
 
-import 'dart:ui' show FontFeature;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -36,6 +36,7 @@ class TelaDispensador extends StatelessWidget {
             rotulos: rotulos,
             tela: tela,
             aviso: aviso,
+            quadro: controlador.quadro,
             aoConfirmar: controlador.confirmar,
           ),
         },
@@ -225,8 +226,20 @@ class CartaoProximaDose extends StatelessWidget {
 }
 
 /// Fluxo da dose: uma instrução por tela, com o número do passo.
+///
+/// No passo 4 (`tome_e_ok`) a tela mostra o preview ao vivo da câmera entre a
+/// frase e o botão OK. O botão continua: sem câmera (ou sem frame ainda), ele
+/// é o caminho de sempre.
 class TelaDose extends StatelessWidget {
-  const TelaDose({super.key, required this.momento, required this.rotulos, required this.tela, required this.aoConfirmar, this.aviso});
+  const TelaDose({
+    super.key,
+    required this.momento,
+    required this.rotulos,
+    required this.tela,
+    required this.aoConfirmar,
+    this.aviso,
+    this.quadro,
+  });
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -234,9 +247,13 @@ class TelaDose extends StatelessWidget {
   final VoidCallback aoConfirmar;
   final Aviso? aviso;
 
+  /// JPEG anotado do preview (só chega no passo 4; `null` antes do 1º frame).
+  final Uint8List? quadro;
+
   @override
   Widget build(BuildContext context) {
     final passo = tela.passo;
+    final mostraPreview = tela.chave == 'tome_e_ok';
     return _Moldura(
       momento: momento,
       rotulos: rotulos,
@@ -255,21 +272,79 @@ class TelaDose extends StatelessWidget {
             const SizedBox(height: 36),
           ],
           Expanded(
-            child: Center(
-              child: _Encolhe(
-                Text(
-                  tela.mensagem,
-                  style: const TextStyle(fontSize: 52, fontWeight: FontWeight.bold, height: 1.15),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
+            child: mostraPreview
+                ? Column(
+                    children: [
+                      _Encolhe(
+                        Text(
+                          tela.mensagem,
+                          style: const TextStyle(fontSize: 52, fontWeight: FontWeight.bold, height: 1.15),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Expanded(child: PreviewCamera(quadro: quadro)),
+                    ],
+                  )
+                : Center(
+                    child: _Encolhe(
+                      Text(
+                        tela.mensagem,
+                        style: const TextStyle(fontSize: 52, fontWeight: FontWeight.bold, height: 1.15),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
           ),
           if (tela.proxima.isNotEmpty) ...[Text(tela.proxima, style: const TextStyle(fontSize: 30, color: Cores.textoFraco)), const SizedBox(height: 24)],
           if (aviso != null) FaixaAviso(aviso: aviso!),
           if (tela.esperaBotao) ...[const SizedBox(height: 16), BotaoOk(rotulos: rotulos, aoConfirmar: aoConfirmar)],
         ],
       ),
+    );
+  }
+}
+
+/// Preview ao vivo da câmera com as caixas desenhadas pelo detector.
+///
+/// O frame chega pronto do Python (JPEG anotado). Até o primeiro chegar, um
+/// marcador discreto ocupa o lugar — sem inventar instrução de domínio.
+class PreviewCamera extends StatelessWidget {
+  const PreviewCamera({super.key, this.quadro});
+
+  final Uint8List? quadro;
+
+  @override
+  Widget build(BuildContext context) {
+    final frame = quadro;
+    return Container(
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Cores.destaque, width: 3),
+      ),
+      child: frame == null
+          ? const Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.photo_camera_outlined, size: 72, color: Cores.textoFraco),
+                    SizedBox(height: 12),
+                    CircularProgressIndicator(color: Cores.destaque),
+                  ],
+                ),
+              ),
+            )
+          : Image.memory(
+              frame,
+              gaplessPlayback: true,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.medium,
+            ),
     );
   }
 }

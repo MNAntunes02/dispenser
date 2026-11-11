@@ -49,3 +49,31 @@ def test_linha_ndjson_e_json_de_uma_linha():
     linha = visao.linha_ndjson({"pill": 1, "no_pill": 1})
     assert "\n" not in linha
     assert json.loads(linha) == {"pill": 1, "no_pill": 1}
+
+
+def test_linha_ndjson_sem_quadro_nao_traz_frame():
+    import json
+
+    linha = json.loads(visao.linha_ndjson({"pill": 1, "no_pill": 0}))
+    assert "frame" not in linha
+
+
+def test_linha_ndjson_com_quadro_traz_frame_base64_de_jpeg():
+    import base64
+    import json
+
+    jpeg = b"\xff\xd8\xff\xe0" + b"conteudo" + b"\xff\xd9"
+    quadro = base64.b64encode(jpeg).decode("ascii")
+
+    linha = json.loads(visao.linha_ndjson({"pill": 2}, quadro))
+
+    assert linha["pill"] == 2
+    assert linha["no_pill"] == 0
+    assert base64.b64decode(linha["frame"]) == jpeg
+
+
+def test_linha_ndjson_com_quadro_vazio_omite_frame():
+    import json
+
+    assert "frame" not in json.loads(visao.linha_ndjson({}, ""))
+    assert "frame" not in json.loads(visao.linha_ndjson({}, None))

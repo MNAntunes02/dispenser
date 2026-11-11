@@ -101,6 +101,7 @@ class ControladorUI extends ChangeNotifier {
     _agenda = Agenda.vazia;
     _eventos = cliente.eventos.listen(_tratarEvento);
     _visao = _detector.confirmacoes.listen((_) => _confirmarPorVisao());
+    _quadrosVisao = _detector.quadros.listen(_tratarQuadro);
   }
 
   final ClienteCore cliente;
@@ -108,6 +109,7 @@ class ControladorUI extends ChangeNotifier {
   final DetectorConsumo _detector;
   late final StreamSubscription<EventoCore> _eventos;
   late final StreamSubscription<void> _visao;
+  late final StreamSubscription<Uint8List> _quadrosVisao;
 
   Rotulos _rotulos = Rotulos.vazio;
   Agenda _agenda = Agenda.vazia;
@@ -122,6 +124,9 @@ class ControladorUI extends ChangeNotifier {
 
   /// A visão já confirmou esta dose (não repetir o `confirma`).
   bool _visaoConfirmou = false;
+
+  /// Último quadro do preview da câmera (só no passo 4).
+  Uint8List? _quadro;
 
   Rotulos get rotulos => _rotulos;
   Agenda get agenda => _agenda;
@@ -160,6 +165,9 @@ class ControladorUI extends ChangeNotifier {
   /// Botão OK visível? Só quando o core pediu (`ok` pendente).
   bool get podeConfirmar => _tela?.esperaBotao ?? false;
 
+  /// Último frame do preview da câmera, se houver (passo 4).
+  Uint8List? get quadro => _quadro;
+
   void iniciar() {
     _relogio = Timer.periodic(const Duration(seconds: 1), (_) => notifyListeners());
   }
@@ -176,12 +184,22 @@ class ControladorUI extends ChangeNotifier {
       if (!_visaoLigada) {
         _visaoLigada = true;
         _visaoConfirmou = false;
+        _quadro = null;
         _detector.iniciar();
       }
     } else if (_visaoLigada) {
       _visaoLigada = false;
+      _quadro = null;
       _detector.parar();
     }
+  }
+
+  /// Guarda o frame do preview e redesenha a tela. Fora do passo 4 o quadro é
+  /// descartado: a câmera só existe durante o consumo.
+  void _tratarQuadro(Uint8List quadro) {
+    if (!_conectado || _tela?.chave != 'tome_e_ok') return;
+    _quadro = quadro;
+    notifyListeners();
   }
 
   /// A câmera reconheceu o consumo: manda o mesmo `confirma` do botão OK.
@@ -244,6 +262,7 @@ class ControladorUI extends ChangeNotifier {
     _relogio?.cancel();
     unawaited(_eventos.cancel());
     unawaited(_visao.cancel());
+    unawaited(_quadrosVisao.cancel());
     unawaited(_detector.dispose());
     super.dispose();
   }

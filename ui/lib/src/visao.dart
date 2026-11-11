@@ -14,13 +14,19 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 /// Uma leitura da câmera: quantos `pill` e `no_pill` foram detectados.
+///
+/// [quadro] é o JPEG anotado do preview (quando `--preview` está ligado). Ele
+/// **não** entra na igualdade: a estabilidade depende só da contagem, e cada
+/// frame novo invalidaria a janela.
 class Leitura {
-  const Leitura(this.pill, this.noPill);
+  const Leitura(this.pill, this.noPill, {this.quadro});
 
   final int pill;
   final int noPill;
+  final Uint8List? quadro;
 
   @override
   bool operator ==(Object other) =>
@@ -30,7 +36,8 @@ class Leitura {
   int get hashCode => Object.hash(pill, noPill);
 
   @override
-  String toString() => 'Leitura(pill: $pill, noPill: $noPill)';
+  String toString() =>
+      'Leitura(pill: $pill, noPill: $noPill, quadro: ${quadro?.length ?? 0}B)';
 }
 
 /// Lê uma linha NDJSON do detector. Devolve `null` se a linha for inválida
@@ -48,7 +55,19 @@ Leitura? leituraDeLinha(String linha) {
   final pill = bruto['pill'];
   final noPill = bruto['no_pill'];
   if (pill is! int || noPill is! int) return null;
-  return Leitura(pill, noPill);
+  return Leitura(pill, noPill, quadro: _decodificarQuadro(bruto['frame']));
+}
+
+/// Decodifica o JPEG em base64 do preview. Frame inválido não invalida a
+/// leitura: a contagem continua valendo e o preview simplesmente não aparece.
+Uint8List? _decodificarQuadro(Object? bruto) {
+  if (bruto is! String || bruto.isEmpty) return null;
+  try {
+    final bytes = base64Decode(bruto);
+    return bytes.isEmpty ? null : bytes;
+  } on FormatException {
+    return null;
+  }
 }
 
 /// Regra de estabilidade da detecção de consumo.
@@ -100,6 +119,8 @@ class ConfiguracaoVisao {
     required this.conf,
     required this.frames,
     required this.minPilulas,
+    this.preview = true,
+    this.previewFps = 5,
   });
 
   final bool ativo;
@@ -110,6 +131,12 @@ class ConfiguracaoVisao {
   final double conf;
   final int frames;
   final int minPilulas;
+
+  /// Pede o JPEG anotado junto do NDJSON (preview ao vivo do passo 4).
+  final bool preview;
+
+  /// Quadros de preview por segundo (0 = todo frame).
+  final double previewFps;
 
   /// Lê `DISPENSER_VISAO_*` do ambiente. Sem `DISPENSER_VISAO_SCRIPT` a
   /// detecção fica desligada (o comportamento é o de hoje: só o botão OK).
@@ -125,6 +152,8 @@ class ConfiguracaoVisao {
       conf: _double(ambiente['DISPENSER_VISAO_CONF']) ?? 0.5,
       frames: _int(ambiente['DISPENSER_VISAO_FRAMES']) ?? 30,
       minPilulas: _int(ambiente['DISPENSER_VISAO_MIN_PILL']) ?? 1,
+      preview: _bool(ambiente['DISPENSER_VISAO_PREVIEW']) ?? true,
+      previewFps: _double(ambiente['DISPENSER_VISAO_PREVIEW_FPS']) ?? 5,
     );
   }
 }
@@ -145,6 +174,9 @@ abstract class DetectorConsumo {
   /// Emite quando a leitura da câmera ficou estável (vira o OK do passo 4).
   Stream<void> get confirmacoes;
 
+  /// Emite o JPEG anotado do preview (vazio quando `preview` está desligado).
+  Stream<Uint8List> get quadros;
+
   /// Liga a detecção (chamado ao entrar no passo 4). Idempotente.
   void iniciar();
 
@@ -162,6 +194,9 @@ class DetectorConsumoNulo implements DetectorConsumo {
   Stream<void> get confirmacoes => const Stream<void>.empty();
 
   @override
+  Stream<Uint8List> get quadros => const Stream<Uint8List>.empty();
+
+  @override
   void iniciar() {}
 
   @override
@@ -174,12 +209,16 @@ class DetectorConsumoNulo implements DetectorConsumo {
 /// Detector controlável para testes (não abre câmera nem processo).
 class DetectorConsumoFake implements DetectorConsumo {
   final _controller = StreamController<void>.broadcast();
+  final _quadrosController = StreamController<Uint8List>.broadcast();
 
   int inicios = 0;
   int paradas = 0;
 
   @override
   Stream<void> get confirmacoes => _controller.stream;
+
+  @override
+  Stream<Uint8List> get quadros => _quadrosController.stream;
 
   @override
   void iniciar() => inicios++;
@@ -192,8 +231,16 @@ class DetectorConsumoFake implements DetectorConsumo {
     if (!_controller.isClosed) _controller.add(null);
   }
 
+  /// Simula um quadro do preview ao vivo.
+  void emitirQuadro(Uint8List quadro) {
+    if (!_quadrosController.isClosed) _quadrosController.add(quadro);
+  }
+
   @override
-  Future<void> dispose() => _controller.close();
+  Future<void> dispose() async {
+    await _controller.close();
+    await _quadrosController.close();
+  }
 }
 
 /// Detector real: dispara o script Python e lê as leituras NDJSON.
@@ -208,6 +255,7 @@ class DetectorConsumoProcesso implements DetectorConsumo {
   final ConfiguracaoVisao config;
   final EstabilidadeLeitura _estabilidade;
   final _controller = StreamController<void>.broadcast();
+  final _quadrosController = StreamController<Uint8List>.broadcast();
 
   Process? _processo;
   StreamSubscription<String>? _linhas;
@@ -215,6 +263,9 @@ class DetectorConsumoProcesso implements DetectorConsumo {
 
   @override
   Stream<void> get confirmacoes => _controller.stream;
+
+  @override
+  Stream<Uint8List> get quadros => _quadrosController.stream;
 
   @override
   void iniciar() {
@@ -235,6 +286,11 @@ class DetectorConsumoProcesso implements DetectorConsumo {
         '--conf',
         '${config.conf}',
         '--ndjson',
+        if (config.preview) ...[
+          '--preview',
+          '--preview-fps',
+          '${config.previewFps}',
+        ],
       ]);
       if (!_deveRodar) {
         // `parar()` chegou antes de o processo subir: não deixar câmera órfã.
@@ -263,6 +319,10 @@ class DetectorConsumoProcesso implements DetectorConsumo {
   void _tratarLinha(String linha) {
     final leitura = leituraDeLinha(linha);
     if (leitura == null) return;
+    final quadro = leitura.quadro;
+    if (quadro != null && !_quadrosController.isClosed) {
+      _quadrosController.add(quadro);
+    }
     if (_estabilidade.registrar(leitura) && !_controller.isClosed) {
       _controller.add(null);
     }
@@ -283,6 +343,7 @@ class DetectorConsumoProcesso implements DetectorConsumo {
   Future<void> dispose() async {
     parar();
     await _controller.close();
+    await _quadrosController.close();
   }
 }
 

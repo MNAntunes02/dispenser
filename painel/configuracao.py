@@ -54,6 +54,10 @@ CHAVES_DO_SISTEMA = (
     "INVOCATION_ID",
 )
 
+#: Prefixo das variáveis que a UI consome (detecção de consumo, ADR 016).
+#: Só elas passam do `.env` para a UI: o resto é do core/backend.
+PREFIXO_VISAO = "DISPENSER_VISAO_"
+
 
 def preparar_diretorio_dev() -> Path:
     """Cria `.run/` com permissão restrita e devolve o caminho."""
@@ -172,9 +176,17 @@ _AMBIENTE_RENDER_UI = {
 
 
 def ambiente_ui() -> dict[str, str]:
-    """Ambiente da UI: renderização por software e socket do core de dev."""
+    """Ambiente da UI: renderização por software, socket do core de dev e visão.
+
+    Só as `DISPENSER_VISAO_*` do `.env` entram: o painel permite exercitar o
+    preview/detecção do passo 4 sem exportar variáveis à mão, sem vazar as
+    credenciais do backend para a UI.
+    """
     ambiente = _ambiente_limpo()
     ambiente.update(_AMBIENTE_RENDER_UI)
+    for chave, valor in ler_env_dev().items():
+        if chave.startswith(PREFIXO_VISAO):
+            ambiente[chave] = valor
     ambiente["DISPENSER_SOCKET"] = str(DIR_DEV / "core.sock")
     return ambiente
 

@@ -122,16 +122,17 @@ diretorios() {
 }
 
 copiar_codigo() {
-  passo "copia core/, hardware/, rede/ e requirements para ${PREFIXO}"
+  passo "copia core/, hardware/, rede/, detecta_pill/ e requirements para ${PREFIXO}"
   executar install -d -o root -g root -m 0755 "$PREFIXO"
-  for d in core hardware rede; do
+  for d in core hardware rede detecta_pill; do
     executar rm -rf "${PREFIXO:?}/${d}"
     executar cp -a "$RAIZ/$d" "$PREFIXO/$d"
   done
   executar cp -a "$RAIZ/docs" "$PREFIXO/docs"
   [[ -f $RAIZ/README.md ]] && executar cp -a "$RAIZ/README.md" "$PREFIXO/README.md"
-  # __pycache__ do dev não vai para o Pi.
+  # __pycache__ e venv do dev não vão para o Pi.
   executar find "$PREFIXO" -name '__pycache__' -type d -prune -exec rm -rf {} +
+  executar rm -rf "$PREFIXO/detecta_pill/.venv"
   # Código do usuário não deve ser editável em runtime.
   executar chown -R root:root "$PREFIXO"
   executar find "$PREFIXO" -type d -exec chmod 0755 {} +
@@ -146,6 +147,21 @@ venv() {
   # dbus-next só é usado no Pi (BlueZ); em x86 o wheel não existe.
   executar "$PREFIXO/.venv/bin/pip" install --quiet -r "$PREFIXO/core/requirements.txt"
   executar chown -R root:root "$PREFIXO/.venv"
+}
+
+venv_visao() {
+  [[ $SEM_VENV -eq 1 ]] && { passo "pulando venv da visão (--sem-venv)"; return; }
+  if [[ ! -f $PREFIXO/detecta_pill/requirements.txt ]]; then
+    aviso "detecta_pill/requirements.txt ausente; visão não instalada"
+    return
+  fi
+  passo "cria venv da visão em ${PREFIXO}/detecta_pill/.venv"
+  # --system-site-packages: picamera2 vem do apt (python3-picamera2), não do pip.
+  executar python3 -m venv --system-site-packages "$PREFIXO/detecta_pill/.venv"
+  executar "$PREFIXO/detecta_pill/.venv/bin/pip" install --quiet --upgrade pip
+  executar "$PREFIXO/detecta_pill/.venv/bin/pip" install --quiet \
+    -r "$PREFIXO/detecta_pill/requirements.txt"
+  executar chown -R root:root "$PREFIXO/detecta_pill/.venv"
 }
 
 ui() {
@@ -282,6 +298,7 @@ planejando a instalação (nada será alterado)
   estado ........ ${ESTADO} (SQLite, provisionamento 600)
   config ........ ${ETC}/dispenser.conf
   venv .......... ${PREFIXO}/.venv (Python do sistema)
+  visão ......... ${PREFIXO}/detecta_pill/.venv (ultralytics + picamera2)
   UI ........... bundle arm64 em ${BINARIO_UI:-$RAIZ/ui/build/linux/arm64/bundle}
 
 depois disto:
@@ -300,6 +317,7 @@ FIM
   diretorios
   copiar_codigo
   venv
+  venv_visao
   ui
   wrappers
   configuracao
