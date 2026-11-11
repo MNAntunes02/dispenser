@@ -23,7 +23,12 @@ from core.armazenamento import Database
 from core.config import Config
 from core.maquina_estados import Acao, Contexto, Fase, processar
 from core.notificador import Notificador
-from core.protocolo_ui import envelope, passo_de
+from core.protocolo_ui import (
+    EVENTOS_SIMULAVEIS,
+    EVENTOS_SIMULAVEIS_COM_SLOT,
+    envelope,
+    passo_de,
+)
 from core.relogio import (
     EstadoRelogio,
     VerificadorRelogio,
@@ -345,6 +350,10 @@ class Coordenador:
     def definir_ui(self, ui: object | None) -> None:
         """Liga/desliga a fonte de mensagens da UI (socket) no boot."""
         self._ui = ui
+        # Prende o retrato antes de a UI poder conectar: a thread do socket
+        # não pode calculá-lo (tocaria o SQLite, que é de uma thread só), e sem
+        # retrato pronto a UI ficaria em "conectando" até o próximo estado.
+        self._atualizar_retrato()
 
     def entrada_ui(self, msg: dict) -> bool:
         """Trata uma mensagem da UI. A UI só informa intenção; o core decide."""
@@ -352,11 +361,50 @@ class Coordenador:
         if tipo == "input":
             return self._acao_ui(str(msg.get("acao") or ""))
         if tipo == "comando":
-            self._db.registrar_log(f"ui_comando:{msg.get('cmd', '')}")
-            return True
+            return self._comando_ui(msg)
         if tipo == "health":
             return True
         return False
+
+    def _comando_ui(self, msg: dict) -> bool:
+        """Comandos de depuração vindos do painel de desenvolvimento (ADR 015)."""
+        cmd = str(msg.get("cmd") or "")
+        if cmd == "simular":
+            return self._comando_simular(msg.get("args"))
+        self._db.registrar_log(f"ui_comando_ignorado:{cmd or 'vazio'}")
+        return False
+
+    def _comando_simular(self, args: object) -> bool:
+        """Injeta um evento de sensor na ponte (painel de desenvolvimento).
+
+        Regra de segurança do paciente: a whitelist (`EVENTOS_SIMULAVEIS`)
+        cobre só sensores de gaveta/slot — a simulação **nunca** confirma a
+        dose (`ok`/`botao`) nem fabrica falha. E com ponte real a injeção é
+        recusada pela própria ponte: em produção o sensor físico é a única
+        fonte de verdade, nunca um clique na tela.
+        """
+        if not isinstance(args, dict):
+            self._db.registrar_log("ui_comando_ignorado:simular/args")
+            return False
+        evento = str(args.get("evento") or "")
+        if evento not in EVENTOS_SIMULAVEIS:
+            self._db.registrar_log(
+                f"ui_comando_ignorado:simular/{evento or 'vazio'}"
+            )
+            return False
+        dados: dict = {"e": evento}
+        if evento in EVENTOS_SIMULAVEIS_COM_SLOT:
+            try:
+                dados["slot"] = int(args.get("slot"))
+            except (TypeError, ValueError):
+                self._db.registrar_log("ui_comando_ignorado:simular/slot")
+                return False
+        if not self._ponte.simular(dados):
+            # Ponte real ou slot fora do hardware: registrar e seguir —
+            # nunca inventar estado de sensor.
+            self._db.registrar_log(f"ui_comando_ignorado:simular/{evento}")
+            return False
+        return True
 
     def _acao_ui(self, acao: str) -> bool:
         with self._trava:
@@ -438,9 +486,14 @@ class Coordenador:
         self._retrato_cache = self.retrato()
 
     def retrato_cache(self) -> list[dict]:
-        """Retrato pronto (gerado no `tick`), seguro de ler de outra thread."""
-        if not self._retrato_cache:
-            self._retrato_cache = self.retrato()
+        """Retrato pronto (gerado no `tick`), seguro de ler de outra thread.
+
+        **Não** calcula nada: esta cópia é lida pela thread do socket, e
+        calcular exigiria o SQLite — que por projeto pertence a uma thread só
+        (`sqlite3` recusaria o uso cruzado). O retrato é preso em `definir_ui`
+        e a cada `tick`; se ainda estiver vazio, quem conecta recebe as
+        publicações normais em seguida.
+        """
         return list(self._retrato_cache)
 
     def _carregar_ativa(self) -> None:

@@ -42,7 +42,27 @@ def test_ciclo_atualiza_agenda_pela_fonte_local(db):
     sinc = Sincronizador(db, fake)
     resumo = sinc.ciclo()
     assert resumo["agenda"] is True
+    assert db.agenda_cached() == MEDS
     assert FonteAgendaLocal(db).agenda() == MEDS
+
+
+def test_ciclo_popula_agenda_cache_com_transportes_健全(db):
+    fake = TransporteFake(MEDS)
+    Sincronizador(db, fake).ciclo()
+    assert db.agenda_cached() == MEDS
+
+
+def test_ciclo_agenda_falha_registra_motivo_no_log(db):
+    fake = TransporteFake(MEDS)
+    fake.offline = True
+    sinc = Sincronizador(db, fake)
+    resumo = sinc.ciclo()
+    assert resumo["agenda"] is False
+    assert db.agenda_cached() == []
+    logs = db.ultimos_logs()
+    tipos = [l["tipo"] for l in logs]
+    assert "sync_agenda_falhou" in tipos
+    assert "ErroTransporte" in " ".join(str(l["detalhe"]) for l in logs)
 
 
 def test_historico_so_com_dose_tomada_e_aviso_com_dose_perdida(db):

@@ -191,6 +191,17 @@ def _id_do_doc(nome: str) -> str:
     return nome.rsplit("/", 1)[-1]
 
 
+_DIA_PARA_ABREV = {
+    "segunda-feira": "seg",
+    "terça-feira": "ter",
+    "quarta-feira": "qua",
+    "quinta-feira": "qui",
+    "sexta-feira": "sex",
+    "sábado": "sáb",
+    "domingo": "dom",
+}
+
+
 def normalizar_medicamentos(docs: list[dict]) -> list[dict]:
     """Converte documentos Firestore `Medicamentos` na forma do agendador."""
     medicamentos: list[dict] = []
@@ -207,7 +218,9 @@ def normalizar_medicamentos(docs: list[dict]) -> list[dict]:
             horario = [h for h in item.get("horario") or [] if isinstance(h, str)]
             if not dia_semana:
                 continue
-            dias.append({"dia_semana": dia_semana, "horario": horario})
+            dias.append(
+                {"dia_semana": _DIA_PARA_ABREV.get(str(dia_semana), dia_semana), "horario": horario}
+            )
         medicamentos.append(
             {
                 "id": _id_do_doc(doc.get("name", "")),

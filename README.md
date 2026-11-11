@@ -84,6 +84,33 @@ instalação:
 cd ui && flutter build linux --target-platform linux-arm64
 ```
 
+### Painel de desenvolvimento (opcional)
+
+Para não precisar de dois terminais, o painel abre uma janela Tkinter que
+inicia/para/reinicia o core e a UI Flutter no PC e mostra os logs dos dois:
+
+```bash
+.venv/bin/python -m painel
+```
+
+- Roda como processos locais, **sem `sudo`** e sem systemd.
+- O core usa estado isolado em `dispenser/.run/` (`state.db`, `core.sock`,
+  `core.lock`), em vez de `/var/lib/dispenser`.
+- A UI roda com `flutter run -d linux` e recebe `DISPENSER_SOCKET` apontando
+  para o socket de dev.
+- Credenciais de produção (`FIREBASE_*`, `DISPENSER_CREDENTIALS_PATH`) e
+  variáveis do systemd (`NOTIFY_SOCKET` etc.) são removidas do ambiente dos
+  filhos: o painel é para desenvolvimento.
+- A opção **“Agenda de demonstração”** grava uma dose para daqui a 2 minutos
+  em `.run/agenda-demo.json`, para exercitar o início do fluxo.
+- O quadro **“Simulador de hardware”** injeta os eventos de sensor (abrir e
+  fechar a gaveta, retirar e devolver o medicamento do slot escolhido) no core
+  pela ponte simulada — assim o fluxo inteiro da dose pode ser percorrido sem
+  o aparelho. Só sensores: o OK da dose continua no botão da tela/UI, e com
+  hardware real os botões não têm efeito (ADR 015).
+- Requer `python3-tk` no Ubuntu (`sudo apt install python3-tk`, se faltar);
+  o Tkinter já vem na maioria dos desktops.
+
 ## Instalação no Pi (Fase 7/8)
 
 O instalador **não faz nada por padrão**: sem `--executar`, ele só mostra o
@@ -127,3 +154,11 @@ Detalhes de operação, diagnóstico e queda de energia: `docs/BOOT.md`.
 versãoado. Segredos (credenciais do backend) ficam em arquivo próprio com
 permissão 600, **fora** do repositório — nunca versione tokens ou
 `google-services.json`.
+
+SCRIPT:
+ cd ~/Desktop/dispenser
+mkdir -p .run
+sed -i "s#/home/alissonantunes/Projetos/OptiBlister/dispenser#$PWD#g" .env
+grep -E "LOCK_PATH|DB_PATH|SOCKET|CREDENTIALS_PATH" .env   # devem apontar para /home/pi/...
+set -a; source .env; set +a
+python -m core.dispenser_main

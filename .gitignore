@@ -26,6 +26,8 @@ config/*credencial*.json
 *.db
 *.db-wal
 *.db-shm
+# Painel de desenvolvimento (banco, socket, lock e agenda de exemplo)
+.run/
 
 # Sistema
 .vscode/

@@ -41,3 +41,13 @@ class HardwareBridge(ABC):
 
     def registrar_evento(self, handler: EventoHandler) -> None:
         """Registra callback que recebe eventos da placa (dict do PROTOCOLO)."""
+
+    def simular(self, evento: dict) -> bool:
+        """Tenta injetar um evento como se viesse da placa.
+
+        Devolve `False` na implementação base — e a ponte real **nunca**
+        deve sobrescrever isto para aceitar: hardware de verdade não fabrica
+        leitura de sensor. O comando `simular` do protocolo da UI (ADR 015,
+        painel de desenvolvimento) só funciona com a ponte simulada.
+        """
+        return False

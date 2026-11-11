@@ -85,13 +85,16 @@ class Sincronizador:
         self._db = db
         self._transporte = transporte
         self._sync = sync_service or SyncService(db)
+        self._ultimo_erro: str = ""
 
     def atualizar_agenda(self) -> bool:
         """Lê os medicamentos do backend e substitui o cache local."""
         try:
             medicamentos = self._transporte.ler_medicamentos()
-        except Exception:
+        except Exception as erro:
+            self._ultimo_erro = f"{erro.__class__.__name__}: {erro}"
             return False
+        self._ultimo_erro = ""
         self._db.substituir_agenda(medicamentos)
         return True
 
@@ -161,7 +164,7 @@ class Sincronizador:
 
     def ciclo(self) -> dict:
         """Um ciclo completo de sincronização (agenda + eventos)."""
-        return {
-            "agenda": self.atualizar_agenda(),
-            "enviados": self.enviar_pendentes(),
-        }
+        agendou = self.atualizar_agenda()
+        if not agendou and self._ultimo_erro:
+            self._db.registrar_log("sync_agenda_falhou", detalhe=self._ultimo_erro)
+        return {"agenda": agendou, "enviados": self.enviar_pendentes()}

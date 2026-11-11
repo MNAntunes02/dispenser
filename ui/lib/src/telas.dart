@@ -2,6 +2,8 @@
 /// o estado da dose.
 library;
 
+import 'dart:ui' show FontFeature;
+
 import 'package:flutter/material.dart';
 
 import 'controlador.dart';
@@ -9,12 +11,10 @@ import 'modelo.dart';
 import 'tema.dart';
 
 /// Formata horas/datas em pt-BR (a UI não traduz texto de domínio, só relógio).
-String hora(DateTime momento) =>
-    '${momento.hour.toString().padLeft(2, '0')}:${momento.minute.toString().padLeft(2, '0')}';
+String hora(DateTime momento) => '${momento.hour.toString().padLeft(2, '0')}:${momento.minute.toString().padLeft(2, '0')}';
 
 /// Rótulo de um passo, no formato do core ("Passo 2 de 6").
-String rotuloPasso(Rotulos rotulos, int atual, int total) =>
-    rotulos.preenchido('passo', {'atual': atual, 'total': total});
+String rotuloPasso(Rotulos rotulos, int atual, int total) => rotulos.preenchido('passo', {'atual': atual, 'total': total});
 
 /// Tela principal: escolhe o estado e desenha.
 class TelaDispensador extends StatelessWidget {
@@ -28,26 +28,9 @@ class TelaDispensador extends StatelessWidget {
       listenable: controlador,
       builder: (context, _) => Scaffold(
         body: switch (controlador.estado) {
-          EstadoSemCore(:final momento, :final rotulos, :final erro) => TelaSemCore(
-            momento: momento,
-            rotulos: rotulos,
-            erro: erro,
-          ),
-          EstadoIniciando(:final momento, :final rotulos) => TelaIniciando(
-            momento: momento,
-            rotulos: rotulos,
-          ),
-          EstadoRepouso(
-            :final momento,
-            :final rotulos,
-            :final agenda,
-            :final aviso,
-          ) => TelaRepouso(
-            momento: momento,
-            rotulos: rotulos,
-            agenda: agenda,
-            aviso: aviso,
-          ),
+          EstadoSemCore(:final momento, :final rotulos, :final erro) => TelaSemCore(momento: momento, rotulos: rotulos, erro: erro),
+          EstadoIniciando(:final momento, :final rotulos) => TelaIniciando(momento: momento, rotulos: rotulos),
+          EstadoRepouso(:final momento, :final rotulos, :final agenda, :final aviso) => TelaRepouso(momento: momento, rotulos: rotulos, agenda: agenda, aviso: aviso),
           EstadoDose(:final momento, :final rotulos, :final tela, :final aviso) => TelaDose(
             momento: momento,
             rotulos: rotulos,
@@ -63,12 +46,7 @@ class TelaDispensador extends StatelessWidget {
 
 /// Sem core: nada é afirmado sobre a dose, só o que fazer.
 class TelaSemCore extends StatelessWidget {
-  const TelaSemCore({
-    super.key,
-    required this.momento,
-    required this.rotulos,
-    this.erro,
-  });
+  const TelaSemCore({super.key, required this.momento, required this.rotulos, this.erro});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -145,13 +123,7 @@ class TelaIniciando extends StatelessWidget {
 
 /// Repouso: hora, próxima dose e indicadores de conexão/falha.
 class TelaRepouso extends StatelessWidget {
-  const TelaRepouso({
-    super.key,
-    required this.momento,
-    required this.rotulos,
-    required this.agenda,
-    this.aviso,
-  });
+  const TelaRepouso({super.key, required this.momento, required this.rotulos, required this.agenda, this.aviso});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -166,21 +138,21 @@ class TelaRepouso extends StatelessWidget {
       rotulos: rotulos,
       conectado: true,
       filho: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Spacer(),
-          // a hora fica no cabeçalho da moldura: aqui só a próxima dose
-          _Encolhe(
-            Text(
-              proxima == null
-                  ? rotulos.preenchido('sem_dose_hoje', const {})
-                  : '${rotulos.preenchido('proxima_dose', const {})} — '
-                      '${proxima.horario} · ${proxima.medicamento}',
-              style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w600),
+          Expanded(
+            child: Center(
+              child: proxima == null
+                  ? _Encolhe(
+                      Text(
+                        rotulos.preenchido('sem_dose_hoje', const {}),
+                        style: const TextStyle(fontSize: 48, fontWeight: FontWeight.w600),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : CartaoProximaDose(rotulos: rotulos, ocorrencia: proxima),
             ),
           ),
-          const Spacer(),
           if (aviso != null) FaixaAviso(aviso: aviso!),
         ],
       ),
@@ -188,16 +160,73 @@ class TelaRepouso extends StatelessWidget {
   }
 }
 
+/// Cartão do repouso: o horário da próxima dose em destaque e, ao lado, o que
+/// tomar. Tudo em uma faixa só, lida de relance à distância.
+class CartaoProximaDose extends StatelessWidget {
+  const CartaoProximaDose({super.key, required this.rotulos, required this.ocorrencia});
+
+  final Rotulos rotulos;
+  final Ocorrencia ocorrencia;
+
+  @override
+  Widget build(BuildContext context) {
+    final detalhes = [
+      if (ocorrencia.dosagem.isNotEmpty) ocorrencia.dosagem,
+      if (ocorrencia.slot != null) rotulos.preenchido('slot', {'slot': ocorrencia.slot}),
+    ].join('  ·  ');
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Cores.painel,
+        borderRadius: BorderRadius.circular(28),
+        border: const Border(left: BorderSide(color: Cores.destaque, width: 12)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 40),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              rotulos.preenchido('proxima_dose', const {}).toUpperCase(),
+              style: const TextStyle(fontSize: 26, letterSpacing: 3, fontWeight: FontWeight.bold, color: Cores.destaque),
+            ),
+            const SizedBox(height: 16),
+            Flexible(
+              child: _Encolhe(
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      ocorrencia.horario,
+                      style: const TextStyle(fontSize: 150, height: 1, fontWeight: FontWeight.w800, fontFeatures: [FontFeature.tabularFigures()]),
+                    ),
+                    const SizedBox(width: 48),
+                    Container(width: 3, height: 110, color: Cores.textoFraco.withValues(alpha: 0.4)),
+                    const SizedBox(width: 48),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(ocorrencia.medicamento, style: const TextStyle(fontSize: 64, fontWeight: FontWeight.bold)),
+                        if (detalhes.isNotEmpty) ...[const SizedBox(height: 8), Text(detalhes, style: const TextStyle(fontSize: 34, color: Cores.textoFraco))],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Fluxo da dose: uma instrução por tela, com o número do passo.
 class TelaDose extends StatelessWidget {
-  const TelaDose({
-    super.key,
-    required this.momento,
-    required this.rotulos,
-    required this.tela,
-    required this.aoConfirmar,
-    this.aviso,
-  });
+  const TelaDose({super.key, required this.momento, required this.rotulos, required this.tela, required this.aoConfirmar, this.aviso});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -236,18 +265,9 @@ class TelaDose extends StatelessWidget {
               ),
             ),
           ),
-          if (tela.proxima.isNotEmpty) ...[
-            Text(
-              tela.proxima,
-              style: const TextStyle(fontSize: 30, color: Cores.textoFraco),
-            ),
-            const SizedBox(height: 24),
-          ],
+          if (tela.proxima.isNotEmpty) ...[Text(tela.proxima, style: const TextStyle(fontSize: 30, color: Cores.textoFraco)), const SizedBox(height: 24)],
           if (aviso != null) FaixaAviso(aviso: aviso!),
-          if (tela.esperaBotao) ...[
-            const SizedBox(height: 16),
-            BotaoOk(rotulos: rotulos, aoConfirmar: aoConfirmar),
-          ],
+          if (tela.esperaBotao) ...[const SizedBox(height: 16), BotaoOk(rotulos: rotulos, aoConfirmar: aoConfirmar)],
         ],
       ),
     );
@@ -256,13 +276,7 @@ class TelaDose extends StatelessWidget {
 
 /// Moldura comum: cabeçalho com hora, título e indicadores.
 class _Moldura extends StatelessWidget {
-  const _Moldura({
-    required this.momento,
-    required this.rotulos,
-    required this.conectado,
-    required this.filho,
-    this.alarme = false,
-  });
+  const _Moldura({required this.momento, required this.rotulos, required this.conectado, required this.filho, this.alarme = false});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -276,17 +290,17 @@ class _Moldura extends StatelessWidget {
       padding: const EdgeInsets.all(40),
       decoration: BoxDecoration(
         color: alarme ? Cores.painel : Cores.fundo,
-        border: Border.all(
-          color: alarme ? Cores.destaque : Colors.transparent,
-          width: 6,
-        ),
+        border: Border.all(color: alarme ? Cores.destaque : Colors.transparent, width: 6),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Flexible(
+              IconeConexao(conectado: conectado),
+              const SizedBox(width: 16),
+              Expanded(
                 child: Text(
                   rotulos.preenchido('dispensador', const {}),
                   maxLines: 1,
@@ -294,16 +308,14 @@ class _Moldura extends StatelessWidget {
                   style: const TextStyle(fontSize: 26, color: Cores.textoFraco),
                 ),
               ),
-              const SizedBox(width: 12),
-              IconeConexao(conectado: conectado),
-              const SizedBox(width: 12),
+              const SizedBox(width: 16),
               Text(
                 hora(momento),
-                style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w600),
+                style: const TextStyle(fontSize: 56, height: 1, fontWeight: FontWeight.w700, fontFeatures: [FontFeature.tabularFigures()]),
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 32),
           Expanded(child: filho),
         ],
       ),
@@ -334,12 +346,7 @@ class IconeConexao extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Icon(
-      conectado ? Icons.wifi : Icons.wifi_off,
-      color: conectado ? Cores.ok : Cores.alerta,
-      size: 34,
-      semanticLabel: conectado ? 'conectado' : 'sem conexão',
-    );
+    return Icon(conectado ? Icons.wifi : Icons.wifi_off, color: conectado ? Cores.ok : Cores.alerta, size: 40, semanticLabel: conectado ? 'conectado' : 'sem conexão');
   }
 }
 
@@ -359,10 +366,7 @@ class BarraPassos extends StatelessWidget {
           child: Container(
             height: 16,
             margin: EdgeInsets.only(right: i == total - 1 ? 0 : 8),
-            decoration: BoxDecoration(
-              color: feito ? Cores.destaque : Cores.textoFraco.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(8),
-            ),
+            decoration: BoxDecoration(color: feito ? Cores.destaque : Cores.textoFraco.withValues(alpha: 0.3), borderRadius: BorderRadius.circular(8)),
           ),
         );
       }),
@@ -388,10 +392,7 @@ class BotaoOk extends StatelessWidget {
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         ),
-        child: Text(
-          rotulos.preenchido('pressione_ok', const {}),
-          style: const TextStyle(fontSize: 46, fontWeight: FontWeight.bold),
-        ),
+        child: Text(rotulos.preenchido('pressione_ok', const {}), style: const TextStyle(fontSize: 46, fontWeight: FontWeight.bold)),
       ),
     );
   }

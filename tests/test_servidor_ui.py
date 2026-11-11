@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import socket
 import stat
+import threading
 import time
 from datetime import datetime
 
@@ -226,3 +227,68 @@ def test_iniciar_falha_se_ja_existe_ui_conectada(tmp_path):
 def test_publicar_sem_nenhum_cliente_nao_quebra(servidor):
     servidor.publicar(envelope("alerta", lambda: RELOGIO, codigo="F004"))
     servidor.parar()
+
+
+def test_retrato_que_falha_nao_derruba_o_core_e_a_ui_continua(tmp_path):
+    """Retrato indisponível: a conexão é aceita e o estado chega depois.
+
+    O retrato é um extra para a UI não ficar "conectando"; se ele falhar
+    (cache ainda vazio, por exemplo), a UI segue hooked e recebe a próxima
+    publicação normal.
+    """
+
+    def retrato_quebrado():
+        raise RuntimeError("retrato indisponível")
+
+    srv = ServidorUI(tmp_path / "core.sock", retrato=retrato_quebrado)
+    srv.iniciar()
+    try:
+        cliente = ClienteFake(srv.caminho)
+        try:
+            for _ in range(100):
+                if srv.conectado():
+                    break
+                time.sleep(0.02)
+            srv.publicar(envelope("estado", lambda: RELOGIO, fase="ALARME", passo=1))
+            assert cliente.receber("estado")["fase"] == "ALARME"
+        finally:
+            cliente.fechar()
+    finally:
+        srv.parar()
+
+
+def test_retrato_e_registro_nao_deixam_publicacao_cair(tmp_path):
+    """A tela nova não pode se perder na conexão (regressão da UI velha).
+
+    O retrato e o registro acontecem no mesmo lock: se uma publicação da
+    thread do core entrasse entre os dois, o cliente receberia o retrato do
+    estado antigo e nunca mais a tela nova — a UI ficaria presa no passado.
+    """
+    segura_retrato = threading.Event()
+    entrou_no_retrato = threading.Event()
+
+    def retrato_lento():
+        entrou_no_retrato.set()
+        segura_retrato.wait(2.0)
+        return [envelope("estado", lambda: RELOGIO, fase="ALARME", passo=1)]
+
+    srv = ServidorUI(tmp_path / "core.sock", retrato=retrato_lento)
+    srv.iniciar()
+    cliente = ClienteFake(srv.caminho)
+    try:
+        # a publicação tenta entrar enquanto a conexão está em andamento
+        def publicar():
+            srv.publicar(envelope("estado", lambda: RELOGIO, fase="DEVOLVA_SLOT", passo=6))
+
+        assert entrou_no_retrato.wait(2.0), "o servidor não aceitou a conexão"
+        publicando = threading.Thread(target=publicar)
+        publicando.start()
+        time.sleep(0.05)  # dá tempo de a publicação chegar ao lock
+        segura_retrato.set()
+        publicando.join(5.0)
+        fases = [cliente.receber("estado").get("fase"), cliente.receber("estado").get("fase")]
+        assert "DEVOLVA_SLOT" in fases, f"publicação perdida na conexão: {fases}"
+    finally:
+        segura_retrato.set()
+        cliente.fechar()
+        srv.parar()

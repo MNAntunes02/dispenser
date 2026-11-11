@@ -18,8 +18,7 @@ import 'src/tema.dart';
 /// Caminho do socket, definido na compilação (`--dart-define`).
 ///
 /// Existe para o dev (`flutter test`) apontar para um core em outra máquina.
-const String kSocketCompilado =
-    String.fromEnvironment('DISPENSER_SOCKET', defaultValue: kSocketPadrao);
+const String kSocketCompilado = String.fromEnvironment('DISPENSER_SOCKET', defaultValue: kSocketPadrao);
 
 /// Caminho efetivo do socket: o ambiente na hora da execução vence.
 ///
@@ -53,7 +52,7 @@ class DispenserApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Dispensador de Medicamentos',
+      title: 'A.Y.D.A.N. v1.0',
       theme: temaKiosk(),
       home: TelaDispensador(controlador: controlador),
     );

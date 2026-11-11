@@ -168,11 +168,12 @@ def main() -> None:
     mini_ui = None
     if args.socket:
         servidor = ServidorUI(args.socket, retrato=coord.retrato_cache)
-        servidor.iniciar()
         # o espião publica no core e repassa no socket: o roteiro continua
         # vendo tudo o que a UI vê
         pub.destino = servidor
+        # antes de `iniciar`: o retrato fica preso antes de qualquer conexão
         coord.definir_ui(servidor)
+        servidor.iniciar()
         if not args.sem_mini_ui:
             mini_ui = MiniUI(Path(args.socket))
             mini_ui.iniciar()

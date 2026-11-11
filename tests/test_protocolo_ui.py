@@ -6,11 +6,14 @@ import pytest
 
 from core.protocolo_ui import (
     ACOES_DE_ENTRADA,
+    EVENTOS_SIMULAVEIS,
+    EVENTOS_SIMULAVEIS_COM_SLOT,
     TIPOS_DA_UI,
     TIPOS_DO_CORE,
     VERSAO,
     ProtocoloInvalido,
     codificar,
+    comando_simular,
     decodificar,
     envelope,
     passo_de,
@@ -102,3 +105,45 @@ def test_passo_none_fora_do_fluxo():
     assert passo_de("gaveta_fora_de_horario") is None
     assert passo_de("chave_desconhecida") is None
     assert passo_de(None) is None
+
+
+# --- comando `simular` (ADR 015, painel de desenvolvimento) ------------------
+
+
+def test_comando_simular_monta_envelope_do_contrato():
+    msg = comando_simular("gaveta_aberta")
+    assert msg["type"] == "comando"
+    assert msg["cmd"] == "simular"
+    assert msg["args"] == {"evento": "gaveta_aberta"}
+    # a linha produzida é aceita pelo contrato da UI -> core
+    assert decodificar(codificar(msg), tipos=TIPOS_DA_UI) == msg
+
+
+def test_comando_simular_inclui_slot_quando_recebido():
+    msg = comando_simular("slot_ausente", 0)
+    assert msg["args"] == {"evento": "slot_ausente", "slot": 0}
+
+
+@pytest.mark.parametrize(
+    "evento", ["ok", "botao", "falha", "horario_chegou", "retorno_ok", ""]
+)
+def test_comando_simular_rejeita_evento_fora_da_whitelist(evento):
+    with pytest.raises(ValueError):
+        comando_simular(evento)
+
+
+def test_comando_simular_rejeita_slot_em_evento_sem_slot():
+    with pytest.raises(ValueError):
+        comando_simular("gaveta_aberta", 0)
+
+
+def test_eventos_simulaveis_so_cobrem_sensores_de_gaveta_e_slot():
+    # Regra de segurança do paciente: simular sensor, nunca confirmar dose
+    # (`ok`/`botao` do paciente) nem fabricar falha de sensor.
+    assert set(EVENTOS_SIMULAVEIS) == {
+        "gaveta_aberta",
+        "gaveta_fechada",
+        "slot_presente",
+        "slot_ausente",
+    }
+    assert set(EVENTOS_SIMULAVEIS_COM_SLOT) <= set(EVENTOS_SIMULAVEIS)

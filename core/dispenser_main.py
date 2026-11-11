@@ -169,13 +169,18 @@ def _subir_servidor_ui(coord: Coordenador) -> ServidorUI | None:
         retrato=coord.retrato_cache,
         intervalo_health_s=float(os.environ.get("DISPENSER_UI_HEALTH_S", "2")),
     )
+    # O retrato é preso **antes** de o socket aceitar conexões: a thread do
+    # socket não pode calculá-lo (tocaria o SQLite) e uma UI que conectasse
+    # nesse instante ficaria sem tela até o próximo estado.
+    coord.definir_publicador_ui(servidor)
+    coord.definir_ui(servidor)
     try:
         servidor.iniciar()
     except (OSError, RuntimeError) as erro:
         _erro(f"UI não disponível em {caminho}: {erro}")
+        coord.definir_publicador_ui(PublicadorLog())
+        coord.definir_ui(None)
         return None
-    coord.definir_publicador_ui(servidor)
-    coord.definir_ui(servidor)
     return servidor
 
 

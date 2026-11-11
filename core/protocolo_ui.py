@@ -33,6 +33,19 @@ TIPOS_DA_UI = ("input", "comando", "health")
 #: Ações de botão aceitas. A política aprovada não tem soneca: só "confirma".
 ACOES_DE_ENTRADA = ("confirma",)
 
+#: Eventos de sensor que o comando `simular` aceita (whitelist, ADR 015).
+#: De propósito **não** inclui `ok`/`botao` (confirmar dose é só do paciente)
+#: nem `falha` (falha vem da placa/core, não de quem clica no painel).
+EVENTOS_SIMULAVEIS = (
+    "gaveta_aberta",
+    "gaveta_fechada",
+    "slot_presente",
+    "slot_ausente",
+)
+
+#: Eventos simuláveis que exigem `slot` nos `args` do comando.
+EVENTOS_SIMULAVEIS_COM_SLOT = ("slot_presente", "slot_ausente")
+
 #: Passo do fluxo guiado (spec 05) por chave de texto. `None` = fora do fluxo.
 PASSO_POR_CHAVE: dict[str, int | None] = {
     "hora_remedio": 1,
@@ -115,3 +128,22 @@ def decodificar(linha: str, *, tipos: Iterable[str] | None = None) -> dict:
 def passo_de(chave: str | None) -> int | None:
     """Passo 1..6 do fluxo guiado a partir da chave de texto (ou `None`)."""
     return PASSO_POR_CHAVE.get(chave) if chave else None
+
+
+def comando_simular(evento: str, slot: int | None = None) -> dict:
+    """Monta a mensagem `comando/simular` (painel de desenvolvimento, ADR 015).
+
+    Injeta um evento de sensor **na ponte simulada**; com ponte real o core
+    recusa (ver `HardwareBridge.simular`). Usada pelo painel e pelos testes —
+    fonte única do formato da mensagem. Levanta `ValueError` em uso indevido
+    (evento fora da whitelist, slot em evento sem slot): quem chama passa
+    constantes, então erro aqui é erro de programação.
+    """
+    if evento not in EVENTOS_SIMULAVEIS:
+        raise ValueError(f"evento não simulável: {evento!r}")
+    args: dict[str, int | str] = {"evento": evento}
+    if slot is not None:
+        if evento not in EVENTOS_SIMULAVEIS_COM_SLOT:
+            raise ValueError(f"evento não recebe slot: {evento!r}")
+        args["slot"] = slot
+    return envelope("comando", cmd="simular", args=args)

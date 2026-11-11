@@ -10,7 +10,9 @@ Garantias de projeto (importam para a segurança do paciente):
   estados. O banco SQLite do core é usado por uma thread só.
 - A UI pode reiniciar à vontade; ao reconectar recebe um retrato pronto
   (gerado pela thread do core, nunca calculado no socket) e volta a receber
-  as publicações.
+  as publicações. O retrato e o registro do cliente acontecem no mesmo bloco
+  do lock: se uma publicação entrasse entre os dois, a UI ficaria com a tela
+  antiga e nunca mais receberia a nova.
 - Publicação nunca é bloqueada por UI lenta: uma UI que não consome é
   desconectada e volta pelo retrato — nenhuma mensagem de estado se perde,
   porque o estado chega inteiro no retrato.
@@ -197,14 +199,10 @@ class ServidorUI:
                 continue
             except OSError:
                 return
-            # Retrato pego antes de registrar: garante que o estado do retrato
-            # chegue antes das publicações seguintes.
-            retrato: list[dict] = []
-            if self._retrato is not None:
-                try:
-                    retrato = list(self._retrato())
-                except Exception:  # noqa: BLE001 - retrato nunca derruba o core
-                    retrato = []
+            # Retrato pego e cliente registrado no mesmo bloco: `publicar` usa
+            # este mesmo lock, então nada se publica entre os dois. Sem isso uma
+            # publicação da thread do core podia cair no vazio — a UI ficaria
+            # com o retrato do estado anterior e nunca receberia a tela nova.
             with self._cond:
                 if self._parando:
                     sock.close()
@@ -212,6 +210,14 @@ class ServidorUI:
                 if len(self._clientes) >= self._max_clientes:
                     sock.close()
                     continue
+                # O retrato vem pronto da thread do core: aqui nunca se toca o
+                # banco (que é de uma thread só) nem a máquina de estados.
+                retrato: list[dict] = []
+                if self._retrato is not None:
+                    try:
+                        retrato = list(self._retrato())
+                    except Exception:  # noqa: BLE001 - retrato nunca derruba o core
+                        retrato = []
                 cliente = _Cliente(sock)
                 for msg in retrato:
                     cliente.fila.append(codificar(msg))
@@ -233,6 +239,25 @@ class ServidorUI:
                         bytes(cliente.fila[j], "utf-8") for j in range(len(cliente.fila))
                     )
                     cliente.fila.clear()
+                # Ler antes de enviar: um cliente que só envia (o painel de
+                # desenvolvimento, ADR 015) não pode esperar o próximo health
+                # para ser ouvido — e se fechar a conexão logo após enviar,
+                # seu comando já foi tratado antes de o envio dar EPIPE.
+                pedaco = self._ler_cliente(cliente)
+                if pedaco is None:
+                    pass  # nada chegou agora
+                elif not pedaco:
+                    # A UI fechou a conexão: trata o que restou no buffer
+                    # (linha sem \n final) e encerra o atendimento.
+                    if buffer.strip():
+                        _, linhas = self._extrair(buffer + b"\n")
+                        for linha in linhas:
+                            self._tratar(linha)
+                    break
+                else:
+                    buffer, linhas = self._extrair(buffer + pedaco)
+                    for linha in linhas:
+                        self._tratar(linha)
                 try:
                     if lote:
                         cliente.sock.sendall(lote)
@@ -240,14 +265,6 @@ class ServidorUI:
                     if erro.errno not in _ERROS_DESCONEXAO:
                         raise
                     break
-                pedaco = self._ler_cliente(cliente)
-                if pedaco is None:
-                    continue
-                if not pedaco:
-                    break  # a UI fechou a conexão
-                buffer, linhas = self._extrair(buffer + pedaco)
-                for linha in linhas:
-                    self._tratar(linha)
         finally:
             cliente.vivo = False
             with self._cond:

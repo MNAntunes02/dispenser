@@ -4,6 +4,8 @@ Atualize este arquivo ao final de cada fase. Ele é carregado no início de cada
 
 ## Estado atual
 - Fase atual: **7 (Boot e robustez) concluída** em 2026-09-29: systemd (core/ui/provision, Type=notify com watchdog, instância única por flock), relógio não confiável com política segura, SQLite em WAL + retenção, journald volátil, install/uninstall idempotentes, backoff de reconexão na UI. Testes Python 210/210 e Flutter 22/22 verdes. `app-saude` não foi alterado (regra 4).
+- Ferramenta de apoio (2026-11-09, ADR 014): painel Tkinter `python -m painel` inicia/para o core e a UI Flutter em processos locais (estado em `.run/`, sem sudo) e acompanha os logs; não substitui o systemd no Pi.
+- Simulador de hardware no painel (2026-11-09, ADR 015): botões "abrir/fechar gaveta" e "retirar/devolver medicamento" injetam eventos de sensor via `comando/simular` pelo mesmo socket da UI — whitelist só de sensores (nunca `ok`/`botao`/`falha`), recusado com ponte real; o fluxo da dose inteiro fica percorrível sem hardware. Junto: `ServidorUI._loop_cliente` passou a ler a entrada antes de enviar (cliente que só envia — o painel — não esperava mais o `health`/perdia o comando no `EPIPE`) e o teste de repouso virou relógio fixo (era flaky de madrugada: dose às 00:04 do dia seguinte publicava `reposo_sem_dose`). Total: **261 pytest** verdes.
 - Próximas: Fase 8 (entrega) — gerar o pacote de instalação, validar no Pi (Fase 3b-run/4) quando chegar.
 
 ## Fases

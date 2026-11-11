@@ -113,10 +113,25 @@ Exemplo:
 | type | Campos | Uso |
 |---|---|---|
 | `input` | `acao` — apenas `confirma` | Intenção do paciente. A política aprovada **não tem soneca**: não existe `cancela` nem `silenciar`. |
-| `comando` | `cmd,args` | Manual/depuração (ex.: `simular`) |
+| `comando` | `cmd,args` | Depuração: hoje só `simular` (ver abaixo) |
 | `health` | — | Heartbeat da UI |
 
 A UI **nunca** confirma uma dose sozinha: ela só devolve a intenção. Quem valida é o core, junto com os sensores, no `Coordenador.tick()`.
+
+#### Comando `simular` (painel de desenvolvimento, ADR 015)
+
+- `cmd:"simular"`, `args:{"evento":<nome>,"slot":N}` — injeta um evento de
+  sensor **na ponte simulada**, para percorrer os passos 2, 3 e 5 do fluxo sem
+  hardware. `slot` é obrigatório em `slot_presente`/`slot_ausente`.
+- Eventos aceitos (whitelist): `gaveta_aberta`, `gaveta_fechada`,
+  `slot_presente`, `slot_ausente`. **Nunca** `ok`/`botao` (confirmar dose é só
+  do paciente) nem `falha` (vem da placa/core): recusados e registrados no
+  log como `ui_comando_ignorado:simular/<evento>`.
+- Com ponte real o core recusa (`HardwareBridge.simular` devolve `False`): em
+  produção o sensor físico é a única fonte de verdade.
+- O evento entra na fila normal da ponte e é drenado no `tick()` seguinte —
+  mesmo caminho de um sensor físico; a FSM segue exigindo a sequência
+  completa (inclusive o OK do paciente) para `dose_tomada`.
 
 ### Telas e fluxo
 Fluxo guiado de 6 passos (spec 05):

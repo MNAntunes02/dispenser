@@ -15,11 +15,10 @@ const Map<String, String> kRotulosPadrao = {
   'reposo': 'Aguardando a próxima dose',
   'proxima_dose': 'Próxima dose',
   'sem_dose_hoje': 'Nenhuma dose programada para hoje',
-  'conectando': 'Conectando ao dispensador…',
-  'sem_conexao': 'Sem conexão com o dispensador',
-  'sem_core_orientacao':
-      'Tente novamente em instantes. Não tome o medicamento sem a orientação do dispensador.',
-  'dispensador': 'Dispensador de medicamentos',
+  'conectando': 'Conectando...',
+  'sem_conexao': 'Sem conexão com o core',
+  'sem_core_orientacao': 'Tente novamente em instantes. Não tome o medicamento sem a orientação do dispensador.',
+  'dispensador': 'A.Y.D.A.N.',
   'aviso_falha': 'Falha no sensor',
   'slot': 'Slot {slot}',
 };
