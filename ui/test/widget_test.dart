@@ -13,6 +13,7 @@ import 'package:dispenser_ui/src/controlador.dart';
 import 'package:dispenser_ui/src/modelo.dart';
 import 'package:dispenser_ui/src/rotulos.dart';
 import 'package:dispenser_ui/src/telas.dart';
+import 'package:dispenser_ui/src/visao.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -71,10 +72,10 @@ Map<String, Object?> kTela({
 };
 
 /// Monta cliente + controlador prontos para o roteiro.
-({ClienteCoreFake cliente, ControladorUI controlador}) _ligado() {
+({ClienteCoreFake cliente, ControladorUI controlador}) _ligado({DetectorConsumo? detector}) {
   final memoria = CanalMemoria();
   final cliente = ClienteCoreFake(memoria)..iniciar();
-  final controlador = ControladorUI(cliente, relogio: () => DateTime(2026, 9, 29, 8, 30))..iniciar();
+  final controlador = ControladorUI(cliente, relogio: () => DateTime(2026, 9, 29, 8, 30), detector: detector)..iniciar();
   return (cliente: cliente, controlador: controlador);
 }
 
@@ -223,6 +224,65 @@ void main() {
       await pumpEventQueue();
       expect(l.controlador.estado, isA<EstadoSemCore>());
       expect(l.controlador.podeConfirmar, isFalse);
+      await l.cliente.dispose();
+    });
+
+    test('passo 4 liga a visão; a confirmação da câmera envia o OK', () async {
+      final detector = DetectorConsumoFake();
+      final l = _ligado(detector: detector);
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(kRepouso());
+      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      await pumpEventQueue();
+      expect(detector.inicios, 1);
+      expect(l.cliente.memoria.enviados, isEmpty); // ainda não confirmou nada
+
+      detector.confirmar();
+      await pumpEventQueue();
+      expect(jsonDecode(l.cliente.memoria.enviados.single), {'v': 1, 'type': 'input', 'acao': 'confirma'});
+
+      // a visão não confirma duas vezes pela mesma dose
+      detector.confirmar();
+      await pumpEventQueue();
+      expect(l.cliente.memoria.enviados, hasLength(1));
+
+      l.controlador.dispose();
+      await l.cliente.dispose();
+    });
+
+    test('sair do passo 4 desliga a visão (confirmação fora é ignorada)', () async {
+      final detector = DetectorConsumoFake();
+      final l = _ligado(detector: detector);
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(kRepouso());
+      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      await pumpEventQueue();
+      expect(detector.inicios, 1);
+
+      l.cliente.receberMensagem(kTela(chave: 'devolva_slot', mensagem: 'Devolva ao slot 3 e feche a gaveta', fase: 'AGUARDANDO_RETORNO', passo: 5, slot: 3));
+      await pumpEventQueue();
+      expect(detector.paradas, 1);
+
+      detector.confirmar();
+      await pumpEventQueue();
+      expect(l.cliente.memoria.enviados, isEmpty);
+
+      l.controlador.dispose();
+      await l.cliente.dispose();
+    });
+
+    test('sem detector (nulo) nada é confirmado sozinho', () async {
+      final l = _ligado();
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(kRepouso());
+      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      await pumpEventQueue();
+      expect(l.cliente.memoria.enviados, isEmpty);
+      expect(l.controlador.podeConfirmar, isTrue); // OK manual segue
+      l.controlador.dispose();
       await l.cliente.dispose();
     });
   });

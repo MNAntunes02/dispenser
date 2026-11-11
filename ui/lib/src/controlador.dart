@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 
 import 'cliente_core.dart';
 import 'modelo.dart';
+import 'visao.dart';
 
 /// Uma tela que o controlador pode mostrar.
 sealed class EstadoUI {
@@ -93,16 +94,20 @@ class EstadoDose extends EstadoUI {
 
 /// Converte os eventos do core no estado mostrado na tela.
 class ControladorUI extends ChangeNotifier {
-  ControladorUI(this.cliente, {DateTime Function()? relogio})
-      : _agora = relogio ?? DateTime.now {
+  ControladorUI(this.cliente, {DateTime Function()? relogio, DetectorConsumo? detector})
+      : _agora = relogio ?? DateTime.now,
+        _detector = detector ?? const DetectorConsumoNulo() {
     _rotulos = Rotulos.vazio;
     _agenda = Agenda.vazia;
     _eventos = cliente.eventos.listen(_tratarEvento);
+    _visao = _detector.confirmacoes.listen((_) => _confirmarPorVisao());
   }
 
   final ClienteCore cliente;
   final DateTime Function() _agora;
+  final DetectorConsumo _detector;
   late final StreamSubscription<EventoCore> _eventos;
+  late final StreamSubscription<void> _visao;
 
   Rotulos _rotulos = Rotulos.vazio;
   Agenda _agenda = Agenda.vazia;
@@ -111,6 +116,12 @@ class ControladorUI extends ChangeNotifier {
   bool _conectado = false;
   Object? _erro;
   Timer? _relogio;
+
+  /// A detecção de visão está ligada agora (só durante o passo 4).
+  bool _visaoLigada = false;
+
+  /// A visão já confirmou esta dose (não repetir o `confirma`).
+  bool _visaoConfirmou = false;
 
   Rotulos get rotulos => _rotulos;
   Agenda get agenda => _agenda;
@@ -157,6 +168,33 @@ class ControladorUI extends ChangeNotifier {
   /// dose foi tomada — o core confere os sensores e responde.
   void confirmar() => cliente.confirmar();
 
+  /// A detecção de visão liga só no passo 4 (consumo) e desliga ao sair. Sem
+  /// câmera o detector é nulo e nada muda: o botão OK segue valendo.
+  void _ajustarVisao() {
+    final noConsumo = _conectado && _tela?.chave == 'tome_e_ok';
+    if (noConsumo) {
+      if (!_visaoLigada) {
+        _visaoLigada = true;
+        _visaoConfirmou = false;
+        _detector.iniciar();
+      }
+    } else if (_visaoLigada) {
+      _visaoLigada = false;
+      _detector.parar();
+    }
+  }
+
+  /// A câmera reconheceu o consumo: manda o mesmo `confirma` do botão OK.
+  ///
+  /// Guardas: só no passo 4, uma vez por dose e nunca no lugar do core — quem
+  /// valida a dose continua sendo ele (ADR 009).
+  void _confirmarPorVisao() {
+    if (_visaoConfirmou) return;
+    if (!_conectado || _tela?.chave != 'tome_e_ok') return;
+    _visaoConfirmou = true;
+    confirmar();
+  }
+
   void _tratarEvento(EventoCore evento) {
     switch (evento) {
       case ConexaoMudou(:final conectado, :final erro):
@@ -167,6 +205,7 @@ class ControladorUI extends ChangeNotifier {
           // um passo antigo como se fosse verdade atual.
           _tela = null;
           _aviso = null;
+          _ajustarVisao();
         }
       case MensagemRecebida(:final mensagem):
         _aplicar(mensagem);
@@ -192,6 +231,7 @@ class ControladorUI extends ChangeNotifier {
         } else if (_aviso != null) {
           _aviso = null;
         }
+        _ajustarVisao();
       case Aviso():
         _aviso = mensagem;
       case Health():
@@ -203,6 +243,8 @@ class ControladorUI extends ChangeNotifier {
   void dispose() {
     _relogio?.cancel();
     unawaited(_eventos.cancel());
+    unawaited(_visao.cancel());
+    unawaited(_detector.dispose());
     super.dispose();
   }
 }

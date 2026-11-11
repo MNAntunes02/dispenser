@@ -14,6 +14,7 @@ import 'src/cliente_core.dart';
 import 'src/controlador.dart';
 import 'src/telas.dart';
 import 'src/tema.dart';
+import 'src/visao.dart';
 
 /// Caminho do socket, definido na compilação (`--dart-define`).
 ///
@@ -37,7 +38,9 @@ void main() {
   final caminho = caminhoSocketDoCore();
   final canal = CanalSocketUnix(caminho);
   final cliente = ClienteCore(canal, caminho: caminho);
-  final controlador = ControladorUI(cliente);
+  // Detecção de consumo (passo 4): liga só se `DISPENSER_VISAO_SCRIPT` existir.
+  final detector = detectorDoAmbiente(Platform.environment);
+  final controlador = ControladorUI(cliente, detector: detector);
   cliente.iniciar();
   controlador.iniciar();
   runApp(DispenserApp(controlador: controlador));

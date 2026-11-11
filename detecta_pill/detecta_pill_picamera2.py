@@ -8,6 +8,8 @@ from libcamera import controls
 from picamera2 import Picamera2
 from ultralytics import YOLO
 
+from visao import contar_classes, linha_ndjson
+
 CORES = {
     "pill": (0, 200, 0),
     "no_pill": (0, 0, 255),
@@ -263,6 +265,17 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
                 infer_largura,
                 infer_altura,
             )
+            if args.ndjson:
+                # Contrato com a UI (ui/lib/src/visao.dart): uma linha por
+                # frame, sem janela. A UI aplica a regra de estabilidade.
+                contagem = contar_classes(
+                    deteccoes, lambda classe_id: nome_da_classe(nomes, classe_id)
+                )
+                print(linha_ndjson(contagem), flush=True)
+                contador_frames += 1
+                if args.max_frames and contador_frames >= args.max_frames:
+                    break
+                continue
             anotado = frame.copy()
             contagem = desenhar(anotado, deteccoes, nomes)
             fps = 1.0 / max(duracao, 1e-9)
@@ -358,6 +371,12 @@ def main():
     )
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument(
+        "--ndjson",
+        action="store_true",
+        help="imprime uma linha JSON por frame ({'pill':N,'no_pill':M}) "
+        "no stdout, sem janela — consumido pela UI (detecção de consumo)",
+    )
     parser.add_argument("--salvar-dir", default="")
     parser.add_argument("--salvar-intervalo", type=int, default=0)
     parser.add_argument("--max-frames", type=int, default=0)
