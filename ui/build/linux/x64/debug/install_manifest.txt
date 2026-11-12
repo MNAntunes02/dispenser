@@ -1,0 +1,13 @@
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/dispenser_ui
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/icudtl.dat
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/lib/libflutter_linux_gtk.so
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/fonts/MaterialIcons-Regular.otf
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/FontManifest.json
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/shaders/ink_sparkle.frag
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/shaders/stretch_effect.frag
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/packages/cupertino_icons/assets/CupertinoIcons.ttf
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/NativeAssetsManifest.json
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/kernel_blob.bin
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/NOTICES.Z
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/version.json
+/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/bundle/data/flutter_assets/AssetManifest.bin

@@ -1,0 +1,29 @@
+# ninja log v5
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/libflutter_linux_gtk.so	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_basic_message_channel.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_binary_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_binary_messenger.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_dart_project.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_engine.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_json_message_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_json_method_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_message_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_method_call.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_method_channel.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_method_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_method_response.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_plugin_registrar.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_plugin_registry.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_standard_message_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_standard_method_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_string_codec.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_value.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/fl_view.h	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/linux/flutter/ephemeral/flutter_linux/flutter_linux.h	60f2acb1488bfbe
+2	15024	0	flutter/_phony_	60f2acb1488bfbe
+2	15024	0	/home/alissonantunes/Área de Trabalho/dispenser/ui/build/linux/x64/debug/flutter/_phony_	60f2acb1488bfbe
+15025	15803	1794495571892480553	runner/CMakeFiles/dispenser_ui.dir/__/flutter/generated_plugin_registrant.cc.o	6f1133bcacb18e4c
+15024	16024	1794495572116483897	runner/CMakeFiles/dispenser_ui.dir/main.cc.o	28ecfa2cbd5444c9
+15024	16135	1794495572226485539	runner/CMakeFiles/dispenser_ui.dir/my_application.cc.o	91a1cebf45b80806
+16135	16301	1794495572394938941	intermediates_do_not_run/dispenser_ui	ee0e5a26b16fb568
+16301	16378	0	CMakeFiles/install.util	4898ae5ef4c774da
