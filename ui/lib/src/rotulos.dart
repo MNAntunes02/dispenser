@@ -18,7 +18,7 @@ const Map<String, String> kRotulosPadrao = {
   'conectando': 'Conectando...',
   'sem_conexao': 'Sem conexão com o core',
   'sem_core_orientacao': 'Tente novamente em instantes. Não tome o medicamento sem a orientação do dispensador.',
-  'dispensador': 'A.Y.D.A.N.',
+  'dispensador': 'A.Y.D.A.N. v1.0',
   'aviso_falha': 'Falha no sensor',
   'slot': 'Slot {slot}',
 };
