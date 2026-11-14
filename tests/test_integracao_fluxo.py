@@ -181,6 +181,9 @@ def test_retomada_apos_reinicio_no_meio_da_dose(tmp_path):
         inicio=DIA,
         relogio=relogio,
     )
+    # O processo novo não tem tela em memória: a retomada precisa republicar o
+    # passo salvo antes de qualquer evento, senão a UI fica em "conectando".
+    assert _chaves(pub2) == ["tome_e_ok"]
     coord2.tick()
     assert db2.ocorrencia_ativa()["estado"] == "MEDICAMENTO_RETIRADO"
     assert db2.outbox_pendentes() == []  # sem duplicar eventos

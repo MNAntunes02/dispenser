@@ -350,6 +350,89 @@ def test_reconexao_da_ui_redesenha_a_tela_atual(montagem):
         segunda.fechar()
 
 
+def test_reconexao_da_ui_no_passo_4_reenvia_tome_e_ok(montagem):
+    """Reconectar no consumo não pode deixar a UI presa em "conectando"."""
+    coord, ponte, servidor, _db = montagem
+    primeira = ClienteUI(servidor.caminho)
+    try:
+        assert _rodar_ate(coord, servidor, primeira, "hora_remedio")
+        primeira.confirmar()
+        assert _rodar_ate(coord, servidor, primeira, "abra_gaveta")
+        ponte.simular({"e": "gaveta_aberta"})
+        assert _rodar_ate(coord, servidor, primeira, "retire_medicamento")
+        ponte.simular({"e": "slot_ausente", "slot": 0})
+        assert _rodar_ate(coord, servidor, primeira, "tome_e_ok")
+    finally:
+        primeira.fechar()
+
+    segunda = ClienteUI(servidor.caminho)
+    try:
+        segunda.bombear(0.3)
+        assert _chave(segunda) == "tome_e_ok"
+        assert segunda.telas[-1]["passo"] == 4
+        assert segunda.telas[-1]["esperaBotao"] is True
+    finally:
+        segunda.fechar()
+
+
+def test_retrato_apos_reinicio_traz_a_dose_ativa(tmp_path):
+    """Processo novo com dose ativa não pode deixar a UI em "conectando".
+
+    O estado persiste no banco, mas `_ultima_tela` nasce vazio. Sem republicar
+    a tela ao carregar a ativa, o retrato do socket chega só com rótulos e
+    agenda — e numa fase que espera o OK (MEDICAMENTO_RETIRADO) nem um novo
+    evento destrava a tela.
+    """
+    relogio = RelogioFixo(datetime(2026, 11, 9, 8, 0, 0))
+    agenda = AgendaMemo(
+        [
+            {
+                "id": "med-1",
+                "nome": "Losartana 50 mg",
+                "dosagem": "1 comprimido",
+                "dias": [
+                    {
+                        "dia_semana": abrev_dia_semana(relogio.agora().date()),
+                        "horario": [relogio.agora().strftime("%H:%M")],
+                    }
+                ],
+            }
+        ]
+    )
+    caminho_db = tmp_path / "retomada.db"
+
+    db = Database(caminho_db, relogio=relogio.agora)
+    ponte = PonteSimulada()
+    coord = Coordenador(CONFIG, db, agenda, ponte, relogio=relogio.agora)
+    coord.conectar()
+    coord.tick()
+    ponte.simular({"e": "botao"})
+    coord.tick()
+    ponte.simular({"e": "gaveta_aberta"})
+    coord.tick()
+    ponte.simular({"e": "slot_ausente", "slot": 0})
+    coord.tick()
+    assert db.ocorrencia_ativa()["estado"] == "MEDICAMENTO_RETIRADO"
+    coord.finalizar()
+
+    db2 = Database(caminho_db, relogio=relogio.agora)
+    coord2 = Coordenador(CONFIG, db2, agenda, PonteSimulada(), relogio=relogio.agora)
+    coord2.conectar()
+    servidor = ServidorUI(tmp_path / "ui-reinicio.sock", retrato=coord2.retrato_cache)
+    coord2.definir_ui(servidor)
+    coord2.definir_publicador_ui(servidor)
+    servidor.iniciar()
+    ui = ClienteUI(servidor.caminho)
+    try:
+        ui.bombear(0.3)
+        assert _chave(ui) == "tome_e_ok"
+        assert ui.telas[-1]["esperaBotao"] is True
+    finally:
+        ui.fechar()
+        servidor.parar()
+        coord2.finalizar()
+
+
 def test_tela_de_repouso_avisa_proxima_dose(tmp_path):
     """Sem dose em aberto o core publica o repouso: a UI nunca fica "conectando"."""
     # Hora fixa, não `datetime.now()`: com relógio real o teste virava flaky

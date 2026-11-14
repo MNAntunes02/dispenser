@@ -38,8 +38,10 @@ mas o modo NDJSON descartava o frame anotado.
 - **Script de câmera** (`detecta_pill/detecta_pill_picamera2.py`):
   `--camera` escolhe a câmera libcamera (a UI já o passava e o argparse
   derrubava o processo); `--preview`/`--preview-fps`/`--preview-largura`
-  controlam o JPEG. A captura converte RGB888→BGR, que é o que o YOLO e as
-  cores do overlay esperam.
+  controlam o JPEG. A captura usa o stream `RGB888`, que o Picamera2 entrega
+  em BGR na memória (o formato que o YOLO e as cores do overlay esperam), sem
+  conversão. O tuning `imx219_noir.json` é o padrão quando presente: sem ele
+  o canal verde desaba e o preview fica magenta nesta câmera.
 - **UI** (`ui/lib/src/visao.dart`): `Leitura` carrega o `quadro` opcional, mas
   a igualdade/estabilidade continua comparando só `pill`/`no_pill`; frame
   inválido não invalida a contagem. `DetectorConsumo.quadros` emite o JPEG e o

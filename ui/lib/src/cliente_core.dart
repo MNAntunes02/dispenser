@@ -85,7 +85,11 @@ class ClienteCore {
   ///
   /// A UI nunca confirma nada por conta própria: quem valida é o core, junto
   /// com os sensores.
-  void confirmar() => canal.enviar(jsonEncode({'v': 1, 'type': 'input', 'acao': 'confirma'}));
+  void confirmar() =>
+      canal.enviar(jsonEncode({'v': 1, 'type': 'input', 'acao': 'confirma'}));
+
+  /// Derruba a conexão atual para receber o retrato de novo.
+  void reconectar() => canal.reconectar();
 
   Future<void> dispose() async {
     _parado = true;
@@ -147,6 +151,8 @@ class CanalMemoria implements CanalCore {
   final _erros = StreamController<Object>.broadcast();
   final _enviados = <String>[];
 
+  int reconexoes = 0;
+
   List<String> get enviados => List.unmodifiable(_enviados);
 
   @override
@@ -160,6 +166,9 @@ class CanalMemoria implements CanalCore {
 
   @override
   void enviar(String linha) => _enviados.add(linha);
+
+  @override
+  void reconectar() => reconexoes++;
 
   /// Simula uma linha recebida do core.
   void receber(String linha) => _linhas.add(linha);

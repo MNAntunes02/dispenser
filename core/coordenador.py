@@ -500,6 +500,12 @@ class Coordenador:
         self._ativa = self._db.ocorrencia_ativa()
         if self._ativa is not None:
             self._avaliar_retorno()
+            # Retomada após reinício: a tela não existe em processo novo, e sem
+            # republicá-la a UI ficaria em "conectando" até um evento mudar a
+            # fase (numa fase que espera o botão, esse evento nunca chega).
+            # Só repinta se `_avaliar_retorno` não concluiu a dose.
+            if self._ativa is not None:
+                self._republicar_tela()
 
     def _escolher_proxima(self) -> None:
         if self._ativa is not None:
