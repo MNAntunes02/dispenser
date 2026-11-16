@@ -330,7 +330,7 @@ def test_dose_passar_da_janela_nao_dispara_em_fila(tmp_path):
     estados = {o["horario"]: o["estado"] for o in db.ocorrencias_do_dia("2026-09-19")}
     assert estados == {"08:00": "NAO_ATENDIDA", "12:00": "NAO_ATENDIDA"}
     assert db.ocorrencia_ativa() is None
-    assert "hora_remedio" not in _chaves(pub)
+    assert "abra_gaveta" not in _chaves(pub)
     assert db.ultimos_logs()[0]["tipo"] == "doses_passadas"
 
 

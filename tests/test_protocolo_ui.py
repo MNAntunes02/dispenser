@@ -13,6 +13,7 @@ from core.protocolo_ui import (
     VERSAO,
     ProtocoloInvalido,
     codificar,
+    comando_liberar_proximo,
     comando_simular,
     decodificar,
     envelope,
@@ -92,12 +93,11 @@ def test_rotulos_e_agenda_sao_publicados_pelo_core():
 
 
 def test_passo_do_fluxo_guiado():
-    assert passo_de("hora_remedio") == 1
-    assert passo_de("abra_gaveta") == 2
-    assert passo_de("retire_medicamento") == 3
-    assert passo_de("tome_e_ok") == 4
-    assert passo_de("devolva_slot") == 5
-    assert passo_de("tudo_certo") == 6
+    assert passo_de("abra_gaveta") == 1
+    assert passo_de("consuma_e_detectar") == 2
+    assert passo_de("devolva_slot") == 3
+    assert passo_de("aviso_retorno") == 3
+    assert passo_de("tudo_certo") == 4
 
 
 def test_passo_none_fora_do_fluxo():
@@ -105,6 +105,17 @@ def test_passo_none_fora_do_fluxo():
     assert passo_de("gaveta_fora_de_horario") is None
     assert passo_de("chave_desconhecida") is None
     assert passo_de(None) is None
+
+
+# --- comando `liberar_proximo` (painel/CLI) ---------------------------------
+
+
+def test_comando_liberar_proximo_monta_envelope_do_contrato():
+    msg = comando_liberar_proximo()
+    assert msg["type"] == "comando"
+    assert msg["cmd"] == "liberar_proximo"
+    assert "args" not in msg
+    assert decodificar(codificar(msg), tipos=TIPOS_DA_UI) == msg
 
 
 # --- comando `simular` (ADR 015, painel de desenvolvimento) ------------------

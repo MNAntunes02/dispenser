@@ -33,3 +33,6 @@ para a UI. Para usar outro bundle: `DISPENSER_UI_BUNDLE=/caminho/do/bundle ./ui/
 ```sh
 LIBGL_ALWAYS_SOFTWARE=1 FLUTTER_ENGINE_SWITCHES=1 FLUTTER_ENGINE_SWITCH_1="enable-impeller=false" ./build/linux/arm64/debug/bundle/dispenser_ui
 ```
+
+SCRIPT:
+DISPENSER_SOCKET=/home/pi/Desktop/dispenser/.run/core.sock flutter-pi --release ~/Desktop/dispenser/ui/pi3-64

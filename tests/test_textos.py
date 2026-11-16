@@ -6,14 +6,17 @@ from core.textos import texto
 
 
 def test_renderiza_mensagem_com_parametros():
-    assert texto("hora_remedio", nome="Losartana", dosagem="50mg") == (
-        "Hora do remédio: Losartana (50mg)"
-    )
+    assert texto("abra_gaveta") == "Abra a gaveta"
     assert texto("tudo_certo", proxima="08:00") == "Tudo certo! Próxima dose às 08:00"
 
 
+def test_texto_do_passo_de_deteccao():
+    assert texto("consuma_e_detectar") == (
+        "Consuma o medicamento e coloque a cartela na posição de detecção"
+    )
+
+
 def test_variantes_sem_slot():
-    assert texto("retire_medicamento_sem_slot") == "Retire o medicamento"
     assert texto("devolva_slot_sem_slot") == "Devolva o medicamento e feche a gaveta"
     assert texto("tudo_certo_fim") == "Tudo certo! Doses do dia concluídas."
 

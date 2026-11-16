@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from core.agendador import abrev_dia_semana
-from core.protocolo_ui import comando_simular
+from core.protocolo_ui import comando_liberar_proximo, comando_simular
 from core.servidor_ui import ServidorUI
 from painel import configuracao
 from painel.comandos import ComandosCore
@@ -371,7 +371,39 @@ def test_comandos_core_loga_falha_quando_o_core_nao_existe(tmp_path):
     assert logs, "a falha de conexão deveria virar log"
     fluxo, mensagem = logs[0]
     assert fluxo == "erro"
-    assert mensagem.startswith("falha ao enviar simulação")
+    assert mensagem.startswith("falha ao enviar comando")
+
+
+def test_comandos_core_envia_liberar_proximo_e_retorna_resultado(tmp_path):
+    servidor = ServidorUI(tmp_path / "core.sock")
+    servidor.iniciar()
+    try:
+        logs: list[tuple[str, str]] = []
+        comandos = ComandosCore(
+            servidor.caminho, ao_logar=lambda fluxo, msg: logs.append((fluxo, msg))
+        )
+
+        assert comandos.liberar_proximo(assincrono=False) is True
+        entradas = _drenar_ate(servidor, 1)
+        assert len(entradas) == 1
+        assert entradas[0]["type"] == "comando"
+        assert entradas[0]["cmd"] == "liberar_proximo"
+        assert "args" not in entradas[0]
+        assert logs == []
+    finally:
+        servidor.parar()
+
+
+def test_liberar_proximo_loga_erro_e_retorna_false_sem_core(tmp_path):
+    logs: list[tuple[str, str]] = []
+    comandos = ComandosCore(
+        tmp_path / "inexistente.sock",
+        ao_logar=lambda fluxo, msg: logs.append((fluxo, msg)),
+    )
+
+    assert comandos.liberar_proximo(assincrono=False) is False
+    assert logs[0][0] == "erro"
+    assert logs[0][1].startswith("falha ao enviar comando")
 
 
 def test_textos_do_simulador_estao_completos():
@@ -384,9 +416,13 @@ def test_textos_do_simulador_estao_completos():
         "simular_retirar",
         "simular_devolver",
         "simular_slot",
+        "liberar_proximo",
+        "liberar_proximo_dica",
+        "liberado",
         "simulado",
         "simulado_slot",
         "erro_simular",
+        "erro_comando",
     ):
         assert chave in TEXTOS, f"texto ausente: {chave}"
         assert TEXTOS[chave].strip()

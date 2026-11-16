@@ -17,6 +17,7 @@ from core.armazenamento import Database
 from core.config import Config
 from core.coordenador import AgendaMemo, Coordenador, PublicadorLog
 from core.notificador import Notificador
+from core.protocolo_ui import comando_liberar_proximo
 from core.sync import Sincronizador, SyncService
 from core.textos import AVISOS_CUIDADOR, aviso_cuidador
 from core.transporte import (
@@ -325,13 +326,13 @@ def test_medicamento_nao_devolvido_gera_aviso_uma_vez(tmp_path):
     coord, db, ponte, relogio = _montar(tmp_path, config=cfg)
     coord.tick()
     for evento in (
-        {"e": "botao"},
         {"e": "gaveta_aberta"},
         {"e": "slot_ausente", "slot": 1},
-        {"e": "botao"},
     ):
         ponte.simular(evento)
         coord.tick()
+    coord.entrada_ui(comando_liberar_proximo())
+    coord.tick()
 
     relogio.avancar(seconds=60)
     coord.tick()  # retorno pendente
@@ -398,10 +399,14 @@ def test_fluxo_feliz_nao_gera_aviso(tmp_path):
     coord, db, ponte, relogio = _montar(tmp_path)
     coord.tick()
     for evento in (
-        {"e": "botao"},
         {"e": "gaveta_aberta"},
         {"e": "slot_ausente", "slot": 1},
-        {"e": "botao"},
+    ):
+        ponte.simular(evento)
+        coord.tick()
+    coord.entrada_ui(comando_liberar_proximo())
+    coord.tick()
+    for evento in (
         {"e": "slot_presente", "slot": 1},
         {"e": "gaveta_fechada"},
     ):

@@ -50,9 +50,16 @@ TEXTOS: dict[str, str] = {
     "simular_retirar": "Retirar medicamento",
     "simular_devolver": "Devolver medicamento",
     "simular_slot": "Slot:",
+    "liberar_proximo": "Liberar próximo passo",
+    "liberar_proximo_dica": (
+        "Após o paciente consumir o medicamento, libere o passo de devolução. "
+        "A câmera é apoio visual."
+    ),
+    "liberado": "liberação do próximo passo enviada ao core",
     "simulado": "simulação enviada ao core: {acao}",
     "simulado_slot": "simulação enviada ao core: {acao} (slot {slot})",
     "erro_simular": "falha ao enviar simulação: {erro}",
+    "erro_comando": "falha ao enviar comando: {erro}",
     # Mensagens do gerenciador de processos
     "ja_rodando": "{servico} já está rodando (PID {pid})",
     "falha_iniciar": "falha ao iniciar: {erro}",

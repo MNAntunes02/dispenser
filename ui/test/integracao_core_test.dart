@@ -51,13 +51,21 @@ void main() {
     final controlador = ControladorUI(cliente);
     cliente.iniciar();
     final telas = <Tela>[];
+    var liberou = false;
     cliente.eventos.listen((evento) {
       if (evento case MensagemRecebida(:final mensagem)) {
         if (mensagem is Tela) {
           telas.add(mensagem);
-          // é assim que a UI confirma: só quando o core pede o OK
-          if (mensagem.esperaBotao) {
-            controlador.confirmar();
+          // O operador libera o passo de detecção pelo painel/CLI.
+          if (!liberou && mensagem.chave == 'consuma_e_detectar') {
+            liberou = true;
+            cliente.canal.enviar(
+              jsonEncode({
+                'v': 1,
+                'type': 'comando',
+                'cmd': 'liberar_proximo',
+              }),
+            );
           }
         }
       }
@@ -70,26 +78,24 @@ void main() {
         limite: const Duration(seconds: 40),
       );
 
-      // os seis passos do roteiro, na ordem
+      // os quatro passos do roteiro, na ordem
       expect(
         telas.where((t) => t.fluxo == 'dose').map((t) => t.chave).toList(),
         [
-          'hora_remedio',
           'abra_gaveta',
-          'retire_medicamento',
-          'tome_e_ok',
+          'consuma_e_detectar',
           'devolva_slot',
           'tudo_certo',
         ],
       );
       // numeração e total vêm do core; a UI só mostra
-      expect(telas.map((t) => t.passo).whereType<int>().toList(), [1, 2, 3, 4, 5, 6]);
-      expect(telas.every((t) => t.totalPassos == 6), isTrue);
-      // os OKs só acontecem onde o core mandou esperar o botão
       expect(
-        telas.where((t) => t.esperaBotao).map((t) => t.chave).toList(),
-        ['hora_remedio', 'tome_e_ok'],
+        telas.map((t) => t.passo).whereType<int>().toList(),
+        [1, 2, 3, 4],
       );
+      expect(telas.every((t) => t.totalPassos == 4), isTrue);
+      // O fluxo novo não usa OK: a liberação é do painel/CLI.
+      expect(telas.where((t) => t.esperaBotao), isEmpty);
       // fluxo concluído: o core volta a publicar a tela de repouso
       expect(controlador.estado, isA<EstadoRepouso>());
     } finally {

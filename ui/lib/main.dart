@@ -43,7 +43,7 @@ void main() {
   final caminho = caminhoSocketDoCore(ambiente);
   final canal = CanalSocketUnix(caminho);
   final cliente = ClienteCore(canal, caminho: caminho);
-  // Detecção de consumo (passo 4): liga só se `DISPENSER_VISAO_SCRIPT` existir.
+  // Detecção de consumo (passo 2): liga só se `DISPENSER_VISAO_SCRIPT` existir.
   final detector = detectorDoAmbiente(ambiente);
   final controlador = ControladorUI(cliente, detector: detector);
   cliente.iniciar();

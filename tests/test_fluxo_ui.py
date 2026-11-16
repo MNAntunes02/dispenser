@@ -28,7 +28,6 @@ CONFIG = Config(
     tick_s=0.05,
     intervalo_alarme_s=120,
     max_tentativas=5,
-    timeout_gaveta_s=120,
     timeout_retorno_s=120,
     limite_retorno_s=1800,
 )
@@ -45,10 +44,10 @@ class RelogioFixo:
 
 
 class ClienteUI:
-    """Cliente do socket que age como a UI: lê telas e manda o OK do paciente.
+    """Cliente do socket que age como a UI/painel.
 
-    Reproduz o que o app Flutter faz — e, de propósito, nada mais: a dose só
-    avança porque o core pediu `ok` e o sensor correspondente confirmou.
+    Reproduz o que o app Flutter + painel fazem: a UI lê as telas e o painel
+    envia a liberação do passo de detecção. A UI nunca decide a dose.
     """
 
     def __init__(self, caminho: Path) -> None:
@@ -95,7 +94,11 @@ class ClienteUI:
             elif msg.get("type") == "alerta":
                 self.alertas.append(msg)
 
+    def liberar_proximo(self) -> None:
+        self._sock.sendall(b'{"v":1,"type":"comando","cmd":"liberar_proximo"}\n')
+
     def confirmar(self) -> None:
+        """Envio legado do OK: o core atual não o usa para avançar."""
         self._sock.sendall(b'{"v":1,"type":"input","acao":"confirma"}\n')
 
     def enviar(self, msg: dict) -> None:
@@ -198,41 +201,42 @@ def test_fluxo_dose_completo_pelo_socket(montagem):
     coord, ponte, servidor, db = montagem
     ui = ClienteUI(servidor.caminho)
     try:
-        # 1. a dose vence e o core publica o primeiro passo
-        assert _rodar_ate(coord, servidor, ui, "hora_remedio")
-        assert ui.telas[-1]["passo"] == 1
-        assert ui.telas[-1]["esperaBotao"] is True
-        assert ui.telas[-1]["totalPassos"] == 6
-        assert _estado(coord, db) == "ALARME"
-
-        # 2. "abra a gaveta": só o OK do paciente move o passo (a UI não decide)
-        ui.confirmar()
+        # 1. a dose vence e o core publica "abra a gaveta"
         assert _rodar_ate(coord, servidor, ui, "abra_gaveta")
-        assert ponte.buzzer_tocou == ["dose"]  # alarme da dose
+        assert ui.telas[-1]["passo"] == 1
         assert ui.telas[-1]["esperaBotao"] is not True
+        assert ui.telas[-1]["totalPassos"] == 4
+        assert _estado(coord, db) == "ALARME"
+        assert ponte.buzzer_tocou == ["dose"]
 
-        # 3. a gaveta abriu: o sensor move o passo, sem involve a UI
+        # 2. a gaveta abriu: o sensor leva ao passo de detecção
         ponte.simular({"e": "gaveta_aberta"})
-        assert _rodar_ate(coord, servidor, ui, "retire_medicamento")
+        assert _rodar_ate(coord, servidor, ui, "consuma_e_detectar")
+        assert ui.telas[-1]["passo"] == 2
 
-        # 4. retirar o medicamento do slot
+        # 3. o slot vazio identifica a devolução, mas não libera o passo
         ponte.simular({"e": "slot_ausente", "slot": 0})
-        assert _rodar_ate(coord, servidor, ui, "tome_e_ok")
-        assert ui.telas[-1]["esperaBotao"] is True
+        for _ in range(10):
+            coord.tick()
+            ui.bombear()
+            servidor.aguardar_proxima(CONFIG.tick_s)
+        assert _chave(ui) == "consuma_e_detectar"
+        assert _estado(coord, db) == "AGUARDANDO_DETECCAO"
 
-        # 5. tomar e confirmar: a intenção volta pelo socket
-        ui.confirmar()
+        # 4. o operador libera o próximo passo pelo painel/CLI
+        ui.liberar_proximo()
         assert _rodar_ate(coord, servidor, ui, "devolva_slot")
         assert _estado(coord, db) == "AGUARDANDO_RETORNO"
+        assert ui.telas[-1]["slot"] == 0
 
-        # 6. devolver o medicamento e fechar a gaveta
+        # 5. devolver o medicamento e fechar a gaveta
         ponte.simular({"e": "slot_presente", "slot": 0})
         ponte.simular({"e": "gaveta_fechada"})
 
         # fim: a ocorrência é registrada como tomada/concluída
         assert _rodar_ate(coord, servidor, ui, "tudo_certo")
         assert _estado(coord, db) == "CONCLUIDA"
-        assert ui.telas[-1]["passo"] == 6
+        assert ui.telas[-1]["passo"] == 4
         assert ui.telas[-1]["esperaBotao"] is not True
     finally:
         ui.fechar()
@@ -243,8 +247,8 @@ def test_primeira_tela_mostra_o_passos_totais(montagem):
     ui = ClienteUI(servidor.caminho)
     try:
         assert _rodar_ate(coord, servidor, ui, None)
-        assert ui.telas[-1]["totalPassos"] == 6
-        assert 1 <= ui.telas[-1]["passo"] <= 6
+        assert ui.telas[-1]["totalPassos"] == 4
+        assert 1 <= ui.telas[-1]["passo"] <= 4
     finally:
         ui.fechar()
 
@@ -259,18 +263,20 @@ def test_fluxo_da_dose_por_comandos_do_painel(montagem):
     coord, _ponte, servidor, db = montagem
     ui = ClienteUI(servidor.caminho)
     try:
-        assert _rodar_ate(coord, servidor, ui, "hora_remedio")
-        ui.confirmar()
         assert _rodar_ate(coord, servidor, ui, "abra_gaveta")
 
         # os "sensores" agora vêm dos comandos do painel
         ui.enviar(comando_simular("gaveta_aberta"))
-        assert _rodar_ate(coord, servidor, ui, "retire_medicamento")
+        assert _rodar_ate(coord, servidor, ui, "consuma_e_detectar")
         ui.enviar(comando_simular("slot_ausente", 0))
-        assert _rodar_ate(coord, servidor, ui, "tome_e_ok")
+        for _ in range(10):
+            coord.tick()
+            ui.bombear()
+            servidor.aguardar_proxima(CONFIG.tick_s)
+        assert _chave(ui) == "consuma_e_detectar"
 
-        # simular não substitui o OK do paciente
-        ui.confirmar()
+        # a liberação é um comando explícito do painel/CLI
+        ui.liberar_proximo()
         assert _rodar_ate(coord, servidor, ui, "devolva_slot")
         assert _estado(coord, db) == "AGUARDANDO_RETORNO"
 
@@ -287,7 +293,7 @@ def test_comando_simular_nao_confirma_dose_pelo_socket(montagem):
     coord, _ponte, servidor, db = montagem
     ui = ClienteUI(servidor.caminho)
     try:
-        assert _rodar_ate(coord, servidor, ui, "hora_remedio")
+        assert _rodar_ate(coord, servidor, ui, "abra_gaveta")
         for evento in ("botao", "ok", "falha", "slot_ausente"):
             # `slot_ausente` fora de fase (a gaveta nem abriu) é ignorado
             # pela máquina de estados; os outros nem passam da whitelist.
@@ -296,7 +302,7 @@ def test_comando_simular_nao_confirma_dose_pelo_socket(montagem):
             coord.tick()
             servidor.aguardar_proxima(CONFIG.tick_s)
         ui.bombear()
-        assert _chave(ui) == "hora_remedio"
+        assert _chave(ui) == "abra_gaveta"
         assert _estado(coord, db) == "ALARME"
     finally:
         ui.fechar()
@@ -312,7 +318,7 @@ def test_acao_desconhecida_da_ui_e_ignorada(montagem):
             coord.tick()
             ui.bombear()
             servidor.aguardar_proxima(CONFIG.tick_s)
-        assert _chave(ui) == "hora_remedio"  # não pulou para o passo 2
+        assert _chave(ui) == "abra_gaveta"  # não pulou para o passo 2
         assert _estado(coord, db) == "ALARME"
     finally:
         ui.fechar()
@@ -338,7 +344,7 @@ def test_reconexao_da_ui_redesenha_a_tela_atual(montagem):
     """A UI pode reiniciar à vontade: ao voltar, recebe o retrato pronto."""
     coord, _ponte, servidor, _db = montagem
     primeira = ClienteUI(servidor.caminho)
-    assert _rodar_ate(coord, servidor, primeira, "hora_remedio")
+    assert _rodar_ate(coord, servidor, primeira, "abra_gaveta")
     chave = _chave(primeira)
     primeira.fechar()
 
@@ -350,27 +356,25 @@ def test_reconexao_da_ui_redesenha_a_tela_atual(montagem):
         segunda.fechar()
 
 
-def test_reconexao_da_ui_no_passo_4_reenvia_tome_e_ok(montagem):
-    """Reconectar no consumo não pode deixar a UI presa em "conectando"."""
+def test_reconexao_da_ui_no_passo_de_deteccao(montagem):
+    """Reconectar na detecção não pode deixar a UI presa em "conectando"."""
     coord, ponte, servidor, _db = montagem
     primeira = ClienteUI(servidor.caminho)
     try:
-        assert _rodar_ate(coord, servidor, primeira, "hora_remedio")
-        primeira.confirmar()
         assert _rodar_ate(coord, servidor, primeira, "abra_gaveta")
         ponte.simular({"e": "gaveta_aberta"})
-        assert _rodar_ate(coord, servidor, primeira, "retire_medicamento")
+        assert _rodar_ate(coord, servidor, primeira, "consuma_e_detectar")
         ponte.simular({"e": "slot_ausente", "slot": 0})
-        assert _rodar_ate(coord, servidor, primeira, "tome_e_ok")
+        assert _rodar_ate(coord, servidor, primeira, "consuma_e_detectar")
     finally:
         primeira.fechar()
 
     segunda = ClienteUI(servidor.caminho)
     try:
         segunda.bombear(0.3)
-        assert _chave(segunda) == "tome_e_ok"
-        assert segunda.telas[-1]["passo"] == 4
-        assert segunda.telas[-1]["esperaBotao"] is True
+        assert _chave(segunda) == "consuma_e_detectar"
+        assert segunda.telas[-1]["passo"] == 2
+        assert segunda.telas[-1]["esperaBotao"] is not True
     finally:
         segunda.fechar()
 
@@ -380,8 +384,7 @@ def test_retrato_apos_reinicio_traz_a_dose_ativa(tmp_path):
 
     O estado persiste no banco, mas `_ultima_tela` nasce vazio. Sem republicar
     a tela ao carregar a ativa, o retrato do socket chega só com rótulos e
-    agenda — e numa fase que espera o OK (MEDICAMENTO_RETIRADO) nem um novo
-    evento destrava a tela.
+    agenda — e numa fase de detecção nem um novo evento destrava a tela.
     """
     relogio = RelogioFixo(datetime(2026, 11, 9, 8, 0, 0))
     agenda = AgendaMemo(
@@ -406,13 +409,11 @@ def test_retrato_apos_reinicio_traz_a_dose_ativa(tmp_path):
     coord = Coordenador(CONFIG, db, agenda, ponte, relogio=relogio.agora)
     coord.conectar()
     coord.tick()
-    ponte.simular({"e": "botao"})
-    coord.tick()
     ponte.simular({"e": "gaveta_aberta"})
     coord.tick()
     ponte.simular({"e": "slot_ausente", "slot": 0})
     coord.tick()
-    assert db.ocorrencia_ativa()["estado"] == "MEDICAMENTO_RETIRADO"
+    assert db.ocorrencia_ativa()["estado"] == "AGUARDANDO_DETECCAO"
     coord.finalizar()
 
     db2 = Database(caminho_db, relogio=relogio.agora)
@@ -425,8 +426,8 @@ def test_retrato_apos_reinicio_traz_a_dose_ativa(tmp_path):
     ui = ClienteUI(servidor.caminho)
     try:
         ui.bombear(0.3)
-        assert _chave(ui) == "tome_e_ok"
-        assert ui.telas[-1]["esperaBotao"] is True
+        assert _chave(ui) == "consuma_e_detectar"
+        assert ui.telas[-1]["esperaBotao"] is not True
     finally:
         ui.fechar()
         servidor.parar()
@@ -522,7 +523,7 @@ def test_definir_ui_prende_o_retrato_antes_da_primeira_conexao(tmp_path):
         assert coord.retrato_cache()  # preso antes de qualquer `tick`
         tipos = [msg.get("type") for msg in coord.retrato_cache()]
         assert tipos[:2] == ["rotulos", "agenda"]
-        assert _rodar_ate(coord, servidor, ui, "hora_remedio")
+        assert _rodar_ate(coord, servidor, ui, "abra_gaveta")
     finally:
         ui.fechar()
         servidor.parar()

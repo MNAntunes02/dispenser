@@ -53,4 +53,4 @@ def test_todo_texto_de_dominio_da_ui_vem_do_core():
 
 
 def test_total_de_passos_unico():
-    assert TOTAL_PASSOS == 6
+    assert TOTAL_PASSOS == 4

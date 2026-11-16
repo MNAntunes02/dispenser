@@ -35,9 +35,7 @@ def test_fases_da_dose_definidas():
     assert fases == {
         "AGUARDANDO",
         "ALARME",
-        "AGUARDANDO_GAVETA",
-        "GAVETA_ABERTA",
-        "MEDICAMENTO_RETIRADO",
+        "AGUARDANDO_DETECCAO",
         "AGUARDANDO_RETORNO",
         "RETORNO_PENDENTE",
         "CONCLUIDA",

@@ -646,12 +646,12 @@ def main():
     # entrada fixa do NCNN (800x800). Em 3280x2464 o loop gasta a maior parte
     # do tempo copiando/redimensionando o frame; os argumentos continuam
     # sobrescrevíveis.
-    parser.add_argument("--imgsz", type=int, default=800)
+    parser.add_argument("--imgsz", type=int, default=480)
     parser.add_argument("--conf", type=float, default=0.5)
-    parser.add_argument("--largura", type=int, default=1280)
-    parser.add_argument("--altura", type=int, default=720)
-    parser.add_argument("--infer-largura", type=int, default=800)
-    parser.add_argument("--infer-altura", type=int, default=600)
+    parser.add_argument("--largura", type=int, default=3280)
+    parser.add_argument("--altura", type=int, default=2464)
+    parser.add_argument("--infer-largura", type=int, default=480)
+    parser.add_argument("--infer-altura", type=int, default=360)
     parser.add_argument("--fps-camera", type=float, default=15)
     parser.add_argument(
         "--awb",

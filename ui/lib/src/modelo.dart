@@ -154,7 +154,7 @@ class Tela extends MensagemCore {
     this.fase,
     this.ocorrenciaId,
     this.passo,
-    this.totalPassos = 6,
+    this.totalPassos = 4,
     this.slot,
     this.proxima = '',
     this.esperaBotao = false,
@@ -168,13 +168,13 @@ class Tela extends MensagemCore {
   final String? fase;
   final String? ocorrenciaId;
 
-  /// Passo 1..6 do fluxo guiado (calculado pelo core) ou `null`.
+  /// Passo 1..4 do fluxo guiado (calculado pelo core) ou `null`.
   final int? passo;
   final int totalPassos;
   final int? slot;
   final String proxima;
 
-  /// Só há botão quando o core pede (`ok` pendente).
+  /// Mantido por compatibilidade; o fluxo atual não exibe botão OK.
   final bool esperaBotao;
 
   /// `dose` ou `alerta` (chave fora do fluxo guiado).
@@ -198,7 +198,7 @@ class Tela extends MensagemCore {
       fase: json['fase'] as String?,
       ocorrenciaId: json['ocorrenciaId'] as String?,
       passo: passo is int ? passo : null,
-      totalPassos: total is int ? total : 6,
+      totalPassos: total is int ? total : 4,
       slot: slot is int ? slot : null,
       proxima: '${json['proxima'] ?? ''}',
       esperaBotao: json['esperaBotao'] == true,

@@ -4,8 +4,14 @@ from core.config import Config
 from core.maquina_estados import Acao, Contexto, Fase, processar
 
 
-def _ctx(tentativas=0, slot=None):
-    return Contexto(nome="Losartana", dosagem="50mg", slot=slot, tentativas=tentativas)
+def _ctx(tentativas=0, slot=None, slot_retorno=None):
+    return Contexto(
+        nome="Losartana",
+        dosagem="50mg",
+        slot=slot,
+        slot_retorno=slot_retorno,
+        tentativas=tentativas,
+    )
 
 
 def _acao(acoes, tipo):
@@ -23,36 +29,57 @@ def test_fluxo_feliz_completo():
     assert tent == 0
     assert _acao(acoes, "buzzer").dados == {"padrao": "dose"}
     assert _acao(acoes, "led").dados == {"slot": None, "estado": "on"}
-    assert _acao(acoes, "tela").dados["chave"] == "hora_remedio"
-
-    fase, acoes, tent = processar(fase, _ctx(slot=2), cfg, "ok")
-    assert fase == Fase.AGUARDANDO_GAVETA
-    assert _tem_acao(acoes, "parar_buzzer")
     assert _acao(acoes, "tela").dados["chave"] == "abra_gaveta"
 
     fase, acoes, tent = processar(fase, _ctx(slot=2), cfg, "gaveta_aberta")
-    assert fase == Fase.GAVETA_ABERTA
-    assert _acao(acoes, "tela").dados == {"chave": "retire_medicamento", "slot": 2}
+    assert fase == Fase.AGUARDANDO_DETECCAO
+    assert _tem_acao(acoes, "parar_buzzer")
+    assert _acao(acoes, "tela").dados["chave"] == "consuma_e_detectar"
 
-    fase, acoes, tent = processar(fase, _ctx(slot=2), cfg, "slot_ausente")
-    assert fase == Fase.MEDICAMENTO_RETIRADO
-    assert _acao(acoes, "tela").dados == {"chave": "tome_e_ok"}
+    # O sensor só identifica o slot de devolução; a dose continua parada.
+    fase, acoes, tent = processar(
+        fase, _ctx(slot=2, slot_retorno=3), cfg, "slot_ausente"
+    )
+    assert fase == Fase.AGUARDANDO_DETECCAO
+    assert acoes == []
 
-    fase, acoes, tent = processar(fase, _ctx(slot=2), cfg, "ok")
+    fase, acoes, tent = processar(
+        fase, _ctx(slot=2, slot_retorno=3), cfg, "liberar_proximo"
+    )
     assert fase == Fase.AGUARDANDO_RETORNO
-    registrar = _acao(acoes, "registrar")
-    assert registrar.dados == {"tipo": "dose_tomada"}
-    assert _acao(acoes, "tela").dados["chave"] == "devolva_slot"
+    assert _acao(acoes, "registrar").dados == {"tipo": "dose_tomada"}
+    assert _acao(acoes, "led").dados == {"slot": 3, "estado": "on"}
+    assert _acao(acoes, "tela").dados == {"chave": "devolva_slot", "slot": 3}
 
-    fase, acoes, tent = processar(fase, _ctx(slot=2), cfg, "retorno_ok")
+    fase, acoes, tent = processar(
+        fase, _ctx(slot=2, slot_retorno=3), cfg, "retorno_ok"
+    )
     assert fase == Fase.CONCLUIDA
     assert _acao(acoes, "registrar").dados == {"tipo": "dose_concluida"}
     assert _acao(acoes, "tela").dados["chave"] == "tudo_certo"
-    assert _aco_apagar_led(acoes) == 2
+    assert _aco_apagar_led(acoes) == 3
 
 
 def _aco_apagar_led(acoes):
     return _acao(acoes, "apagar_led").dados["slot"]
+
+
+def test_liberar_proximo_usa_slot_agendado_quando_nao_ha_slot_ausente():
+    cfg = Config()
+    fase, acoes, _ = processar(
+        Fase.AGUARDANDO_DETECCAO, _ctx(slot=2), cfg, "liberar_proximo"
+    )
+    assert fase == Fase.AGUARDANDO_RETORNO
+    assert _acao(acoes, "tela").dados == {"chave": "devolva_slot", "slot": 2}
+
+
+def test_liberar_proximo_sem_slot_publica_variante_sem_slot():
+    cfg = Config()
+    fase, acoes, _ = processar(
+        Fase.AGUARDANDO_DETECCAO, _ctx(), cfg, "liberar_proximo"
+    )
+    assert fase == Fase.AGUARDANDO_RETORNO
+    assert _acao(acoes, "tela").dados == {"chave": "devolva_slot", "slot": None}
 
 
 def test_alarme_sem_resposta_repeticao_e_perdida():
@@ -71,6 +98,9 @@ def test_alarme_sem_resposta_repeticao_e_perdida():
     assert _tem_acao(acoes, "notificar")
     assert _acao(acoes, "registrar").dados == {"tipo": "dose_perdida"}
     assert _tem_acao(acoes, "parar_buzzer")
+    assert all(
+        _acao(acoes, "tela").dados["chave"] == "abra_gaveta" for acoes in repetidas
+    )
 
 
 def test_timeout_sem_resposta_dentro_do_limite_repete():
@@ -80,26 +110,13 @@ def test_timeout_sem_resposta_dentro_do_limite_repete():
     assert fase == Fase.ALARME
     assert tent == 2
     assert _acao(acoes, "buzzer").dados == {"padrao": "dose"}
-
-
-def test_timeout_gaveta_conta_nova_tentativa():
-    cfg = Config(max_tentativas=2)
-    fase, acoes, tent = processar(
-        Fase.AGUARDANDO_GAVETA, _ctx(tentativas=0), cfg, "timeout_gaveta"
-    )
-    assert fase == Fase.ALARME  # volta para alarme (nova tentativa)
-    assert tent == 1
-    assert _acao(acoes, "buzzer").dados == {"padrao": "dose"}
-
-    fase, acoes, tent = processar(fase, _ctx(tentativas=1), cfg, "ok")
-    assert fase == Fase.AGUARDANDO_GAVETA
-    assert tent == 1
+    assert _acao(acoes, "tela").dados["chave"] == "abra_gaveta"
 
 
 def test_dose_perdida_pela_gaveta_nao_aberta():
     cfg = Config(max_tentativas=1)
     fase, acoes, tent = processar(
-        Fase.AGUARDANDO_GAVETA, _ctx(tentativas=0), cfg, "timeout_gaveta"
+        Fase.ALARME, _ctx(tentativas=0), cfg, "timeout_alarme"
     )
     assert fase == Fase.NAO_ATENDIDA
     assert tent == 1
@@ -109,22 +126,28 @@ def test_dose_perdida_pela_gaveta_nao_aberta():
 def test_medicamento_nao_devolvido_pendente_e_limite():
     cfg = Config()
     fase, acoes, tent = processar(
-        Fase.AGUARDANDO_RETORNO, _ctx(tentativas=0), cfg, "timeout_retorno"
+        Fase.AGUARDANDO_RETORNO,
+        _ctx(tentativas=0, slot=2, slot_retorno=3),
+        cfg,
+        "timeout_retorno",
     )
     assert fase == Fase.RETORNO_PENDENTE
     assert tent == 0
     assert _acao(acoes, "buzzer").dados == {"padrao": "retorno"}
-    assert _acao(acoes, "led").dados == {"slot": None, "estado": "on"}
-    assert _acao(acoes, "tela").dados["chave"] == "aviso_retorno"
+    assert _acao(acoes, "led").dados == {"slot": 3, "estado": "on"}
+    assert _acao(acoes, "tela").dados == {"chave": "aviso_retorno", "slot": 3}
 
     fase, acoes, tent = processar(fase, _ctx(), cfg, "limite_retorno_excedido")
     assert fase == Fase.RETORNO_PENDENTE
     notificar = _acao(acoes, "notificar")
     assert notificar.dados == {"motivo": "nao_devolvido"}
 
-    fase, acoes, tent = processar(fase, _ctx(slot=2), cfg, "retorno_ok")
+    fase, acoes, tent = processar(
+        fase, _ctx(slot=2, slot_retorno=3), cfg, "retorno_ok"
+    )
     assert fase == Fase.CONCLUIDA
     assert _acao(acoes, "registrar").dados == {"tipo": "dose_concluida"}
+    assert _aco_apagar_led(acoes) == 3
 
 
 def test_gaveta_aberta_fora_de_horario_permanece_aguardando():
@@ -140,7 +163,7 @@ def test_gaveta_aberta_fora_de_horario_permanece_aguardando():
 def test_falha_de_sensor_vai_a_falha_sem_assumir_tomada():
     cfg = Config()
     fase, acoes, tent = processar(
-        Fase.MEDICAMENTO_RETIRADO, _ctx(), cfg, "falha", {"codigo": "F003"}
+        Fase.AGUARDANDO_DETECCAO, _ctx(), cfg, "falha", {"codigo": "F003"}
     )
     assert fase == Fase.FALHA
     assert tent == 0
@@ -156,7 +179,7 @@ def test_falha_de_sensor_vai_a_falha_sem_assumir_tomada():
 
 def test_falha_em_qualquer_fase():
     cfg = Config()
-    for fase in (Fase.ALARME, Fase.GAVETA_ABERTA, Fase.RETORNO_PENDENTE):
+    for fase in (Fase.ALARME, Fase.AGUARDANDO_DETECCAO, Fase.RETORNO_PENDENTE):
         nova, acoes, _ = processar(fase, _ctx(), cfg, "falha", {"codigo": "F001"})
         assert nova == Fase.FALHA
     from_aguardando, _, _ = processar(Fase.AGUARDANDO, _ctx(), cfg, "falha", {"codigo": "F002"})
@@ -174,20 +197,33 @@ def test_terminal_nao_reabre_idempotencia():
 def test_evento_repetido_em_fase_errada_ignorado():
     cfg = Config()
     fase, acoes, tent = processar(Fase.ALARME, _ctx(), cfg, "gaveta_aberta")
-    assert fase == Fase.ALARME
+    assert fase == Fase.AGUARDANDO_DETECCAO
+    assert _acao(acoes, "tela").dados["chave"] == "consuma_e_detectar"
+
+    # Já detectando: abrir de novo não muda nada.
+    fase, acoes, tent = processar(
+        Fase.AGUARDANDO_DETECCAO, _ctx(), cfg, "gaveta_aberta"
+    )
+    assert fase == Fase.AGUARDANDO_DETECCAO
     assert acoes == []
-    fase, acoes, tent = processar(Fase.GAVETA_ABERTA, _ctx(), cfg, "gaveta_aberta")
-    assert fase == Fase.GAVETA_ABERTA
-    assert acoes == []
-    fase, acoes, tent = processar(Fase.AGUARDANDO_RETORNO, _ctx(), cfg, "slot_ausente")
-    assert fase == Fase.AGUARDANDO_RETORNO
-    assert acoes == []
-    # duplo 'ok' no mesma fase de retirada
-    fase, acoes, tent = processar(Fase.MEDICAMENTO_RETIRADO, _ctx(), cfg, "ok")
-    assert fase == Fase.AGUARDANDO_RETORNO
-    fase2, acoes2, _ = processar(fase, _ctx(), cfg, "ok")
+
+    # Liberar duas vezes: a segunda chega já em AGUARDANDO_RETORNO.
+    fase, _, _ = processar(
+        Fase.AGUARDANDO_DETECCAO, _ctx(slot=2), cfg, "liberar_proximo"
+    )
+    fase2, acoes2, _ = processar(fase, _ctx(slot=2), cfg, "liberar_proximo")
     assert fase2 == Fase.AGUARDANDO_RETORNO
     assert acoes2 == []
+
+    # OK não avança o fluxo novo.
+    fase, acoes, tent = processar(Fase.ALARME, _ctx(), cfg, "ok")
+    assert fase == Fase.ALARME
+    assert acoes == []
+    fase, acoes, tent = processar(
+        Fase.AGUARDANDO_DETECCAO, _ctx(), cfg, "ok"
+    )
+    assert fase == Fase.AGUARDANDO_DETECCAO
+    assert acoes == []
 
 
 def test_retorno_confirmado_sem_tomar_nao_existe():

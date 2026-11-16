@@ -214,8 +214,8 @@ class Aplicacao:
     def _construir_simulador(self, pai: ttk.LabelFrame) -> None:
         """Botões que injetam eventos de sensor no core (ADR 015).
 
-        Sem hardware os passos 2, 3 e 5 do fluxo não avançam — a gaveta e
-        os slots só existem na ponte simulada. Os botões enviam o comando
+        Sem hardware os passos 1 e 3 do fluxo não avançam — a gaveta e os
+        slots só existem na ponte simulada. Os botões enviam o comando
         `simular` pelo mesmo socket da UI; com ponte real o core recusa (o
         sensor físico é a única fonte de verdade em produção).
         """
@@ -250,6 +250,22 @@ class Aplicacao:
             )
             botao.pack(side="left", padx=(0, 6))
             self._botoes_simulador.append(botao)
+
+        ttk.Label(pai, text=TEXTOS["liberar_proximo_dica"]).pack(
+            anchor="w", pady=(10, 0)
+        )
+        liberar = ttk.Button(
+            pai,
+            text=TEXTOS["liberar_proximo"],
+            command=self._liberar_proximo,
+        )
+        liberar.pack(anchor="w", pady=(4, 0))
+        self._botoes_simulador.append(liberar)
+
+    def _liberar_proximo(self) -> None:
+        """Libera o passo de detecção (câmera é apoio, operador decide)."""
+        self._comandos.liberar_proximo()
+        self._registrar_linha("core", "painel", texto("liberado"))
 
     def _simular(self, evento: str, com_slot: bool, rotulo: str) -> None:
         """Um botão do simulador foi clicado: envia e registra no log do core."""

@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from core.protocolo_ui import codificar, comando_simular
+from core.protocolo_ui import codificar, comando_liberar_proximo, comando_simular
 from painel.textos import texto
 
 #: Conectar/enviar/fechar tem que ser rápido: o painel nunca deixa a janela
@@ -54,7 +54,24 @@ class ComandosCore:
             daemon=True,
         ).start()
 
-    def _enviar(self, msg: dict) -> None:
+    def liberar_proximo(self, *, assincrono: bool = True) -> bool:
+        """Envia a liberação do passo de detecção (painel ou CLI).
+
+        No painel o envio roda em thread (`assincrono=True`) para não travar o
+        Tkinter. O CLI usa `assincrono=False` e recebe o resultado do envio.
+        """
+        msg = comando_liberar_proximo()
+        if assincrono:
+            threading.Thread(
+                target=self._enviar,
+                args=(msg,),
+                name="painel-liberar-proximo",
+                daemon=True,
+            ).start()
+            return True
+        return self._enviar(msg)
+
+    def _enviar(self, msg: dict) -> bool:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(_TIMEOUT_S)
         try:
@@ -72,9 +89,11 @@ class ComandosCore:
                         break
                 except OSError:
                     break
+            return True
         except OSError as erro:
             # Core parado ou socket sumindo no meio: o painel segue de pé.
-            self._ao_logar("erro", texto("erro_simular", erro=erro))
+            self._ao_logar("erro", texto("erro_comando", erro=erro))
+            return False
         finally:
             try:
                 sock.close()

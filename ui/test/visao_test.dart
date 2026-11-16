@@ -1,4 +1,4 @@
-/// Testes da detecção de consumo (passo 4): regra de estabilidade, leitura do
+/// Testes da detecção de consumo (passo 2): regra de estabilidade, leitura do
 /// NDJSON, configuração por ambiente e o detector real via subprocesso.
 @TestOn('vm')
 library;
@@ -51,11 +51,18 @@ void main() {
       expect(regra.registrar(const Leitura(1, 2)), isTrue);
     });
 
-    test('sem comprimido nunca confirma (câmera ligada sem ler cartela)', () {
+    test('com minPilulas=1 não confirma sem comprimido', () {
       final regra = EstabilidadeLeitura(frames: 2, minPilulas: 1);
       for (var i = 0; i < 10; i++) {
         expect(regra.registrar(const Leitura(0, 3)), isFalse);
       }
+    });
+
+    test('padrão aceita qualquer leitura estável (inclusive no_pill)', () {
+      final regra = EstabilidadeLeitura(frames: 2);
+      expect(regra.minPilulas, 0);
+      expect(regra.registrar(const Leitura(0, 3)), isFalse);
+      expect(regra.registrar(const Leitura(0, 3)), isTrue);
     });
 
     test('respeita minPilulas', () {
@@ -120,7 +127,7 @@ void main() {
       final config = ConfiguracaoVisao.doAmbiente(const {});
       expect(config.ativo, isFalse);
       expect(config.frames, 30);
-      expect(config.minPilulas, 1);
+      expect(config.minPilulas, 0);
       expect(config.python, 'python3');
       expect(config.preview, isTrue);
       expect(config.previewFps, 5);
