@@ -41,13 +41,38 @@ class TelaDispensador extends StatelessWidget {
             :final momento,
             :final rotulos,
             :final agenda,
+            :final estoque,
             :final aviso,
           ) =>
             TelaRepouso(
               momento: momento,
               rotulos: rotulos,
               agenda: agenda,
+              estoque: estoque,
               aviso: aviso,
+            ),
+          EstadoRegistro(
+            :final momento,
+            :final rotulos,
+            :final tela,
+            :final aviso,
+            :final visaoAtiva,
+            :final visaoEstavel,
+            :final visaoSemComprimidos,
+            :final visaoAviso,
+            :final visaoEspera,
+          ) =>
+            TelaRegistro(
+              momento: momento,
+              rotulos: rotulos,
+              tela: tela,
+              aviso: aviso,
+              quadro: controlador.quadro,
+              visaoAtiva: visaoAtiva,
+              visaoEstavel: visaoEstavel,
+              visaoSemComprimidos: visaoSemComprimidos,
+              visaoAviso: visaoAviso,
+              visaoEspera: visaoEspera,
             ),
           EstadoDose(
             :final momento,
@@ -192,19 +217,21 @@ class TelaIniciando extends StatelessWidget {
   }
 }
 
-/// Repouso: hora, próxima dose e indicadores de conexão/falha.
+/// Repouso: hora, próxima dose, estoque dos 12 slots e estado da conexão.
 class TelaRepouso extends StatelessWidget {
   const TelaRepouso({
     super.key,
     required this.momento,
     required this.rotulos,
     required this.agenda,
+    required this.estoque,
     this.aviso,
   });
 
   final DateTime momento;
   final Rotulos rotulos;
   final Agenda agenda;
+  final Estoque estoque;
   final Aviso? aviso;
 
   @override
@@ -217,7 +244,8 @@ class TelaRepouso extends StatelessWidget {
       filho: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
+          Flexible(
+            flex: 3,
             child: Center(
               child: proxima == null
                   ? _Encolhe(
@@ -229,10 +257,142 @@ class TelaRepouso extends StatelessWidget {
                         textAlign: TextAlign.center,
                       ),
                     )
-                  : CartaoProximaDose(rotulos: rotulos, ocorrencia: proxima),
+                  : _Encolhe(
+                      CartaoProximaDose(rotulos: rotulos, ocorrencia: proxima),
+                    ),
             ),
           ),
+          const SizedBox(height: Espaco.m),
+          Flexible(flex: 4, child: GridEstoque(rotulos: rotulos, itens: estoque.itens)),
           if (aviso != null) FaixaAviso(aviso: aviso!),
+        ],
+      ),
+    );
+  }
+}
+
+/// Grade dos 12 slots: ímpares à esquerda, pares à direita, crescente.
+///
+/// A posição (`linha`/`coluna`) vem do core — a UI não duplica a regra.
+class GridEstoque extends StatelessWidget {
+  const GridEstoque({super.key, required this.rotulos, required this.itens});
+
+  final Rotulos rotulos;
+  final List<ItemEstoque> itens;
+
+  @override
+  Widget build(BuildContext context) {
+    final esquerda = itens
+        .where((item) => item.coluna == 'esquerda')
+        .toList()
+      ..sort((a, b) => a.linha.compareTo(b.linha));
+    final direita = itens
+        .where((item) => item.coluna == 'direita')
+        .toList()
+      ..sort((a, b) => a.linha.compareTo(b.linha));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Etiqueta(
+          texto: rotulos.preenchido('estoque', const {}).toUpperCase(),
+          estilo: Tipografia.h6.copyWith(
+            fontWeight: Tipografia.negrito,
+            letterSpacing: 2,
+          ),
+          icone: Icons.inventory_2_outlined,
+        ),
+        const SizedBox(height: Espaco.s),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _ColunaEstoque(rotulos: rotulos, itens: esquerda)),
+              const SizedBox(width: Espaco.m),
+              Expanded(child: _ColunaEstoque(rotulos: rotulos, itens: direita)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ColunaEstoque extends StatelessWidget {
+  const _ColunaEstoque({required this.rotulos, required this.itens});
+
+  final Rotulos rotulos;
+  final List<ItemEstoque> itens;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final item in itens)
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: Espaco.s),
+              child: _CartaoSlot(rotulos: rotulos, item: item),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _CartaoSlot extends StatelessWidget {
+  const _CartaoSlot({required this.rotulos, required this.item});
+
+  final Rotulos rotulos;
+  final ItemEstoque item;
+
+  @override
+  Widget build(BuildContext context) {
+    final quantidade = rotulos.preenchido(
+      'comprimidos',
+      {'quantidade': item.quantidade},
+    );
+    return Container(
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Cores.painel,
+        borderRadius: BorderRadius.circular(Medidas.raioMedio),
+        border: Border.all(color: Cores.borda, width: 2),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: Espaco.s,
+            color: item.vazio ? Cores.borda : Cores.destaque,
+          ),
+          const SizedBox(width: Espaco.s),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.rotulo,
+                    style: Tipografia.h5.copyWith(fontWeight: Tipografia.negrito),
+                  ),
+                  Text(
+                    item.vazio
+                        ? rotulos.preenchido('vazio', const {})
+                        : item.medicamento.isEmpty
+                        ? quantidade
+                        : '${item.medicamento} · $quantidade',
+                    style: Tipografia.h6.copyWith(
+                      color: item.vazio ? Cores.textoSuave : Cores.destaqueSuave,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: Espaco.s),
         ],
       ),
     );
@@ -347,6 +507,139 @@ class CartaoProximaDose extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Registro de cartela: posicionar na câmera ou aguardar confirmação do slot.
+///
+/// A leitura da câmera é enviada ao core como dado de sensor; a confirmação de
+/// que a cartela foi colocada no slot é feita no painel/CLI.
+class TelaRegistro extends StatelessWidget {
+  const TelaRegistro({
+    super.key,
+    required this.momento,
+    required this.rotulos,
+    required this.tela,
+    this.aviso,
+    this.quadro,
+    this.visaoAtiva = false,
+    this.visaoEstavel = false,
+    this.visaoSemComprimidos = false,
+    this.visaoAviso,
+    this.visaoEspera = Duration.zero,
+  });
+
+  final DateTime momento;
+  final Rotulos rotulos;
+  final Tela tela;
+  final Aviso? aviso;
+  final Uint8List? quadro;
+  final bool visaoAtiva;
+  final bool visaoEstavel;
+  final bool visaoSemComprimidos;
+  final String? visaoAviso;
+  final Duration visaoEspera;
+
+  String get _statusRegistro {
+    if (!visaoAtiva) {
+      return rotulos.preenchido('registro_camera_desativada', const {});
+    }
+    if (visaoSemComprimidos) {
+      return rotulos.preenchido('registro_sem_comprimidos', const {});
+    }
+    if (visaoEstavel) {
+      return rotulos.preenchido('registro_aguardando', const {});
+    }
+    if (visaoAviso != null) return 'Câmera: $visaoAviso';
+    if (quadro == null) return rotulos.preenchido('registro_preparando', const {});
+    return rotulos.preenchido('registro_apontar', const {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final posicionar = tela.chave == 'registro_posicionar';
+    return _Moldura(
+      momento: momento,
+      rotulos: rotulos,
+      conectado: true,
+      filho: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _Etiqueta(
+              texto: rotulos.preenchido('registro', const {}).toUpperCase(),
+              estilo: Tipografia.h6.copyWith(fontWeight: Tipografia.negrito),
+              icone: Icons.inventory_2_outlined,
+            ),
+          ),
+          const SizedBox(height: Espaco.l),
+          Expanded(
+            child: posicionar
+                ? Column(
+                    children: [
+                      _Encolhe(
+                        Text(
+                          tela.mensagem,
+                          style: Tipografia.display.copyWith(height: 1.15),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      const SizedBox(height: Espaco.l),
+                      Expanded(
+                        child: PreviewCamera(
+                          quadro: quadro,
+                          status: _statusRegistro,
+                        ),
+                      ),
+                    ],
+                  )
+                : Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: Espaco.xxl,
+                      vertical: Espaco.l,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Cores.fundo.withValues(alpha: 0.55),
+                      border: Border.all(color: Cores.destaque, width: 3),
+                      borderRadius: BorderRadius.circular(Medidas.raioCartao),
+                    ),
+                    child: Center(
+                      child: _Encolhe(
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              tela.mensagem,
+                              style: Tipografia.h3.copyWith(
+                                fontWeight: Tipografia.negrito,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                            if (tela.chave == 'registro_slot') ...[
+                              const SizedBox(height: Espaco.m),
+                              Text(
+                                rotulos.preenchido(
+                                  'registro_slot_dica',
+                                  const {},
+                                ),
+                                style: Tipografia.h5.copyWith(
+                                  color: Cores.textoFraco,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+          if (aviso != null) FaixaAviso(aviso: aviso!),
         ],
       ),
     );

@@ -12,7 +12,8 @@ from typing import Optional
 from hardware.bridge.hardware_bridge import EventoHandler, HardwareBridge
 
 #: Slots da ponte simulada (padrão usado pela demo e pelo painel de dev).
-SLOTS_PADRAO = 4
+#: Índices de hardware 0..11; os rótulos de estoque exibidos são 1..12.
+SLOTS_PADRAO = 12
 
 
 class PonteSimulada(HardwareBridge):

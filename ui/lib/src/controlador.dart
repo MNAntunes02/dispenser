@@ -64,12 +64,14 @@ class EstadoRepouso extends EstadoUI {
     required this.momento,
     required this.rotulos,
     required this.agenda,
+    required this.estoque,
     this.aviso,
   });
 
   final DateTime momento;
   final Rotulos rotulos;
   final Agenda agenda;
+  final Estoque estoque;
 
   /// Último aviso do core (falha de sensor, gaveta fora de horário).
   final Aviso? aviso;
@@ -110,6 +112,34 @@ class EstadoDose extends EstadoUI {
   DateTime get agora => momento;
 }
 
+/// Registro de cartela: o core mandou posicionar na detecção ou já indicou o slot.
+class EstadoRegistro extends EstadoUI {
+  const EstadoRegistro({
+    required this.momento,
+    required this.rotulos,
+    required this.tela,
+    this.aviso,
+    this.visaoAtiva = false,
+    this.visaoEstavel = false,
+    this.visaoSemComprimidos = false,
+    this.visaoAviso,
+    this.visaoEspera = Duration.zero,
+  });
+
+  final DateTime momento;
+  final Rotulos rotulos;
+  final Tela tela;
+  final Aviso? aviso;
+  final bool visaoAtiva;
+  final bool visaoEstavel;
+  final bool visaoSemComprimidos;
+  final String? visaoAviso;
+  final Duration visaoEspera;
+
+  @override
+  DateTime get agora => momento;
+}
+
 /// Converte os eventos do core no estado mostrado na tela.
 class ControladorUI extends ChangeNotifier {
   ControladorUI(
@@ -125,6 +155,7 @@ class ControladorUI extends ChangeNotifier {
     _agenda = Agenda.vazia;
     _eventos = cliente.eventos.listen(_tratarEvento);
     _visao = _detector.confirmacoes.listen((_) => _marcarVisaoEstavel());
+    _leiturasVisao = _detector.leituras.listen(_tratarLeituraRegistro);
     _quadrosVisao = _detector.quadros.listen(_tratarQuadro);
     _avisosVisao = _detector.avisos.listen(_tratarAvisoVisao);
   }
@@ -137,11 +168,13 @@ class ControladorUI extends ChangeNotifier {
   final int maxTentativasSemTela;
   late final StreamSubscription<EventoCore> _eventos;
   late final StreamSubscription<void> _visao;
+  late final StreamSubscription<Leitura> _leiturasVisao;
   late final StreamSubscription<Uint8List> _quadrosVisao;
   late final StreamSubscription<String> _avisosVisao;
 
   Rotulos _rotulos = Rotulos.vazio;
   Agenda _agenda = Agenda.vazia;
+  Estoque _estoque = Estoque.vazio;
   Tela? _tela;
   Aviso? _aviso;
   bool _conectado = false;
@@ -152,11 +185,20 @@ class ControladorUI extends ChangeNotifier {
   int _tentativasSemTela = 0;
   String? _erroSemTela;
 
-  /// A detecção de visão está ligada agora (só durante o passo 2).
+  /// A detecção de visão está ligada agora (passo 2 ou registro).
   bool _visaoLigada = false;
+
+  /// Chave/id que abriu a câmera (troca de registro reinicia a leitura).
+  String? _visaoChave;
 
   /// A câmera já produziu uma leitura estável nesta tentativa.
   bool _visaoEstavel = false;
+
+  /// Leitura estável sem comprimidos no registro (caiu para fallback manual).
+  bool _visaoSemComprimidos = false;
+
+  /// Só uma leitura é enviada por registro, para não duplicar a contagem.
+  bool _leituraRegistroEnviada = false;
 
   /// Último quadro do preview da câmera (só no passo 2).
   Uint8List? _quadro;
@@ -182,6 +224,21 @@ class ControladorUI extends ChangeNotifier {
         erro: _erroSemTela,
       );
     }
+    if (tela.fluxo == 'registro') {
+      return EstadoRegistro(
+        momento: agora,
+        rotulos: _rotulos,
+        tela: tela,
+        aviso: _aviso,
+        visaoAtiva: _detector.ativo,
+        visaoEstavel: _visaoEstavel,
+        visaoSemComprimidos: _visaoSemComprimidos,
+        visaoAviso: _visaoAviso,
+        visaoEspera: _visaoIniciadaEm == null
+            ? Duration.zero
+            : agora.difference(_visaoIniciadaEm!),
+      );
+    }
     if (tela.doseEmAberto) {
       return EstadoDose(
         momento: agora,
@@ -201,6 +258,7 @@ class ControladorUI extends ChangeNotifier {
       momento: agora,
       rotulos: _rotulos,
       agenda: _agenda,
+      estoque: _estoque,
       aviso: _aviso,
     );
   }
@@ -257,22 +315,35 @@ class ControladorUI extends ChangeNotifier {
   /// consumo é feita pelo painel/CLI, não pela UI.
   void confirmar() => cliente.confirmar();
 
-  /// A detecção de visão liga só no passo 2 (consumo) e desliga ao sair.
-  /// Sem câmera o detector é nulo; a liberação manual continua no painel.
+  /// A detecção liga no passo 2 (consumo) e no registro de cartela.
+  /// Sem câmera o detector é nulo; o painel/script segue com a quantidade manual.
   void _ajustarVisao() {
-    final noConsumo = _conectado && _tela?.chave == 'consuma_e_detectar';
-    if (noConsumo) {
-      if (!_visaoLigada) {
+    final chave = _tela?.chave;
+    final noConsumo = _conectado && chave == 'consuma_e_detectar';
+    final noRegistro = _conectado && chave == 'registro_posicionar';
+    final chaveEspecifica = noRegistro
+        ? '$chave:${_tela?.registroId ?? ''}'
+        : chave;
+    final deveLigar = noConsumo || noRegistro;
+    if (deveLigar) {
+      if (!_visaoLigada || _visaoChave != chaveEspecifica) {
         _visaoLigada = true;
+        _visaoChave = chaveEspecifica;
         _visaoEstavel = false;
+        _visaoSemComprimidos = false;
+        _leituraRegistroEnviada = false;
         _quadro = null;
         _visaoAviso = null;
         _visaoIniciadaEm = _agora();
-        _detector.iniciar();
+        if (noRegistro && !_detector.ativo) _detector.iniciar();
+        if (noConsumo && !_detector.ativo) _detector.iniciar();
       }
     } else if (_visaoLigada) {
       _visaoLigada = false;
+      _visaoChave = null;
       _visaoEstavel = false;
+      _visaoSemComprimidos = false;
+      _leituraRegistroEnviada = false;
       _quadro = null;
       _visaoAviso = null;
       _visaoIniciadaEm = null;
@@ -289,7 +360,11 @@ class ControladorUI extends ChangeNotifier {
   /// Guarda o frame do preview e redesenha a tela. Fora do passo 2 o quadro é
   /// descartado: a câmera só existe durante a detecção.
   void _tratarQuadro(Uint8List quadro) {
-    if (!_conectado || _tela?.chave != 'consuma_e_detectar') return;
+    final chave = _tela?.chave;
+    if (!_conectado ||
+        (chave != 'consuma_e_detectar' && chave != 'registro_posicionar')) {
+      return;
+    }
     _quadro = quadro;
     notifyListeners();
   }
@@ -300,8 +375,31 @@ class ControladorUI extends ChangeNotifier {
   /// pelo painel/CLI, e o core registra a liberação.
   void _marcarVisaoEstavel() {
     if (_visaoEstavel) return;
-    if (!_conectado || _tela?.chave != 'consuma_e_detectar') return;
+    final chave = _tela?.chave;
+    if (!_conectado ||
+        (chave != 'consuma_e_detectar' && chave != 'registro_posicionar')) {
+      return;
+    }
     _visaoEstavel = true;
+    notifyListeners();
+  }
+
+  /// Envia ao core a contagem estável da câmera no registro de cartela.
+  ///
+  /// A UI apenas reporta o sensor: escolha do slot e confirmação são do
+  /// painel/CLI. Leitura sem comprimido cai para o fallback manual.
+  void _tratarLeituraRegistro(Leitura leitura) {
+    if (!_conectado || _tela?.chave != 'registro_posicionar') return;
+    _visaoEstavel = true;
+    if (leitura.pill <= 0) {
+      _visaoSemComprimidos = true;
+      notifyListeners();
+      return;
+    }
+    _visaoSemComprimidos = false;
+    if (_leituraRegistroEnviada) return;
+    _leituraRegistroEnviada = true;
+    cliente.registrarLeitura(_tela?.registroId ?? '', leitura.pill);
     notifyListeners();
   }
 
@@ -335,6 +433,8 @@ class ControladorUI extends ChangeNotifier {
         _rotulos = mensagem;
       case Agenda():
         _agenda = mensagem;
+      case Estoque():
+        _estoque = mensagem;
       case Tela():
         _tela = mensagem;
         _semTelaDesde = null;
@@ -360,6 +460,7 @@ class ControladorUI extends ChangeNotifier {
     _relogio?.cancel();
     unawaited(_eventos.cancel());
     unawaited(_visao.cancel());
+    unawaited(_leiturasVisao.cancel());
     unawaited(_quadrosVisao.cancel());
     unawaited(_avisosVisao.cancel());
     unawaited(_detector.dispose());

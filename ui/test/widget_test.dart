@@ -67,6 +67,8 @@ Map<String, Object?> kTela({
   bool esperaBotao = false,
   String fluxo = 'dose',
   String proxima = '',
+  String registroId = '',
+  int? quantidade,
 }) => {
   'v': 1,
   'type': 'estado',
@@ -80,6 +82,27 @@ Map<String, Object?> kTela({
   'passo': ?passo,
   'slot': ?slot,
   if (proxima.isNotEmpty) 'proxima': proxima,
+  if (registroId.isNotEmpty) 'registroId': registroId,
+  'quantidade': ?quantidade,
+};
+
+/// Estoque dos 12 slots como o core publica (slot 12 com 7 comprimidos).
+Map<String, Object?> kEstoque() => {
+  'v': 1,
+  'type': 'estoque',
+  'ts': '2026-09-29T08:00:00',
+  'itens': [
+    for (var i = 0; i < 12; i++)
+      {
+        'slot': i + 1,
+        'rotulo': 'Slot ${i + 1}',
+        'linha': i ~/ 2,
+        'coluna': i.isEven ? 'esquerda' : 'direita',
+        'medicamento': i == 11 ? 'Losartana' : '',
+        'quantidade': i == 11 ? 7 : 0,
+        'vazio': i != 11,
+      },
+  ],
 };
 
 /// PNG 1×1 válido: o `Image.memory` do preview precisa de bytes decodificáveis.
@@ -144,6 +167,28 @@ void main() {
         () => MensagemCore.deJson({'v': 1, 'type': 'doses'}),
         throwsA(isA<MensagemInvalida>()),
       );
+    });
+
+    test('lê o estoque e os campos do registro', () {
+      final estoque = MensagemCore.deJson(kEstoque()) as Estoque;
+      expect(estoque.itens, hasLength(12));
+      expect(estoque.itens.last.slot, 12);
+      expect(estoque.itens.last.quantidade, 7);
+      expect(estoque.itens.first.coluna, 'esquerda');
+      expect(estoque.itens[1].coluna, 'direita');
+
+      final tela = MensagemCore.deJson(
+        kTela(
+          chave: 'registro_slot',
+          mensagem: 'Cartela com 7 comprimidos. Coloque no slot 12.',
+          fluxo: 'registro',
+          registroId: 'abc123',
+          quantidade: 7,
+        ),
+      ) as Tela;
+      expect(tela.registroId, 'abc123');
+      expect(tela.quantidade, 7);
+      expect(tela.doseEmAberto, isFalse);
     });
 
     test('tela sem esperaBotao não habilita o botão', () {
@@ -436,6 +481,57 @@ void main() {
       },
     );
 
+    test('registro liga a câmera e envia só a leitura estável', () async {
+      final detector = DetectorConsumoFake();
+      final l = _ligado(detector: detector);
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'registro_posicionar',
+          mensagem: 'Posicione a cartela na área de detecção',
+          fluxo: 'registro',
+          registroId: 'abc123',
+        ),
+      );
+      await pumpEventQueue();
+
+      expect(detector.inicios, 1);
+      expect(l.controlador.estado, isA<EstadoRegistro>());
+      expect(l.cliente.memoria.enviados, isEmpty);
+
+      detector.emitirLeitura(const Leitura(0, 3));
+      await pumpEventQueue();
+      expect(l.cliente.memoria.enviados, isEmpty);
+      expect(
+        (l.controlador.estado as EstadoRegistro).visaoSemComprimidos,
+        isTrue,
+      );
+
+      detector.emitirLeitura(const Leitura(7, 0));
+      detector.emitirLeitura(const Leitura(7, 0));
+      await pumpEventQueue();
+
+      expect(l.cliente.memoria.enviados, hasLength(1));
+      expect(l.cliente.memoria.enviados.single, contains('"cmd":"registrar_leitura"'));
+      expect(l.cliente.memoria.enviados.single, contains('"quantidade":7'));
+
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'registro_slot',
+          mensagem: 'Cartela com 7 comprimidos. Coloque no slot 12.',
+          fluxo: 'registro',
+          slot: 12,
+        ),
+      );
+      await pumpEventQueue();
+      expect(detector.paradas, 1);
+      expect((l.controlador.estado as EstadoRegistro).tela.slot, 12);
+
+      l.controlador.dispose();
+      await l.cliente.dispose();
+    });
+
     test('sem detector (nulo) nada é confirmado sozinho', () async {
       final l = _ligado();
       l.cliente.receberMensagem(kRotulos);
@@ -706,6 +802,84 @@ void main() {
         find.text('Falha F003 no sensor. Avise o cuidador.'),
         findsOneWidget,
       );
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
+    testWidgets('repouso mostra os 12 slots em estoque', (tester) async {
+      tester.view.physicalSize = const Size(1024, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final l = _ligado();
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(kEstoque());
+      l.cliente.receberMensagem(kRepouso());
+      await tester.pump();
+
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      await tester.pump();
+
+      expect(find.byType(GridEstoque), findsOneWidget);
+      expect(find.text('Slot 1'), findsOneWidget);
+      expect(find.text('Slot 12'), findsOneWidget);
+      expect(find.text('Vazio'), findsNWidgets(11));
+      expect(find.textContaining('Losartana · 7 comprimidos'), findsOneWidget);
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
+    testWidgets('registro mostra a câmera e depois a dica do painel', (
+      tester,
+    ) async {
+      final detector = DetectorConsumoFake();
+      final l = _ligado(detector: detector);
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'registro_posicionar',
+          mensagem: 'Posicione a cartela na área de detecção',
+          fluxo: 'registro',
+          registroId: 'abc123',
+        ),
+      );
+      await tester.pump();
+
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      await tester.pump();
+
+      expect(find.text('Posicione a cartela na área de detecção'), findsOneWidget);
+      expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
+      expect(find.textContaining('Preparando câmera'), findsOneWidget);
+
+      detector.emitirQuadro(base64Decode(kPng1x1));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(Image), findsOneWidget);
+
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'registro_slot',
+          mensagem: 'Cartela com 7 comprimidos. Coloque no slot 12.',
+          fluxo: 'registro',
+          slot: 12,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text('Cartela com 7 comprimidos. Coloque no slot 12.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Confirme no painel após colocar a cartela'),
+        findsOneWidget,
+      );
+      expect(find.byType(Image), findsNothing);
+      expect(find.text('Pressione OK'), findsNothing);
       l.controlador.dispose();
       await encerrar(tester, l.cliente);
     });

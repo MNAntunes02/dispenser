@@ -30,6 +30,15 @@ TEXTOS: dict[str, str] = {
     ),
     "reposo": "Tudo em dia. Próxima dose às {proxima}",
     "reposo_sem_dose": "Nenhuma dose programada para hoje",
+    "registro_posicionar": "Posicione a cartela na área de detecção",
+    "registro_slot": (
+        "Cartela com {quantidade} comprimidos. Coloque no slot {slot} e "
+        "confirme no painel."
+    ),
+    "registro_invalido": (
+        "Não foi possível ler a cartela. Informe a quantidade no painel."
+    ),
+    "registro_sem_slot": "Nenhum slot vazio. Libere um slot antes de registrar.",
 }
 
 #: Rótulos fixos que a UI exibe fora do fluxo da dose. Moram aqui (e não na
@@ -49,6 +58,16 @@ ROTULOS_UI: dict[str, str] = {
     "dispensador": "A.Y.D.A.N. v1.0",
     "aviso_falha": "Falha no sensor",
     "slot": "Slot {slot}",
+    "estoque": "Estoque de comprimidos",
+    "vazio": "Vazio",
+    "comprimidos": "{quantidade} comprimidos",
+    "registro": "Registro de cartela",
+    "registro_camera_desativada": "Câmera desativada — informe a quantidade no painel",
+    "registro_aguardando": "Leitura estável — enviando contagem ao core",
+    "registro_preparando": "Preparando câmera...",
+    "registro_apontar": "Aponte a cartela para a câmera",
+    "registro_sem_comprimidos": "Nenhum comprimido detectado — informe a quantidade no painel",
+    "registro_slot_dica": "Confirme no painel após colocar a cartela",
 }
 
 #: Avisos gravados para cuidador/app (Fase 6, ADR 010). São lidos no

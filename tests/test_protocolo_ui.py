@@ -12,8 +12,15 @@ from core.protocolo_ui import (
     TIPOS_DO_CORE,
     VERSAO,
     ProtocoloInvalido,
+    CHAVES_REGISTRO,
+    COMANDOS_REGISTRO,
+    FLUXO_REGISTRO,
     codificar,
+    comando_confirmar_registro,
+    comando_iniciar_registro,
     comando_liberar_proximo,
+    comando_registrar_leitura,
+    comando_registrar_manual,
     comando_simular,
     decodificar,
     envelope,
@@ -76,6 +83,28 @@ def test_decodificar_rejeita_linha_acima_do_limite():
         decodificar('{"v": 1, "type": "health", "x": "' + "a" * 70000 + '"}')
 
 
+def test_chaves_de_registro_nao_tem_passo_de_dose():
+    assert set(CHAVES_REGISTRO) == {
+        "registro_posicionar",
+        "registro_slot",
+        "registro_invalido",
+        "registro_sem_slot",
+    }
+    assert all(passo_de(chave) is None for chave in CHAVES_REGISTRO)
+
+
+def test_estoque_e_comandos_de_registro_seguem_o_contrato():
+    assert FLUXO_REGISTRO == "registro"
+    assert set(COMANDOS_REGISTRO) == {
+        "iniciar_registro",
+        "registrar_leitura",
+        "registrar_manual",
+        "confirmar_registro",
+    }
+    mensagem = envelope("estoque", lambda: RELOGIO, itens=[])
+    assert decodificar(codificar(mensagem), tipos=TIPOS_DO_CORE) == mensagem
+
+
 def test_apenas_confirma_e_aceita_como_acao_de_entrada():
     # Política aprovada: sem soneca. A UI não pode pedir "silenciar"/"pular".
     assert ACOES_DE_ENTRADA == ("confirma",)
@@ -89,7 +118,14 @@ def test_tipos_declarados_sao_disjuntos_e_conhecidos():
 
 def test_rotulos_e_agenda_sao_publicados_pelo_core():
     """O retrato da UI começa por `rotulos` (idioma) e `agenda` (dia)."""
-    assert set(TIPOS_DO_CORE) == {"rotulos", "agenda", "estado", "alerta", "health"}
+    assert set(TIPOS_DO_CORE) == {
+        "rotulos",
+        "agenda",
+        "estado",
+        "alerta",
+        "health",
+        "estoque",
+    }
 
 
 def test_passo_do_fluxo_guiado():
@@ -116,6 +152,30 @@ def test_comando_liberar_proximo_monta_envelope_do_contrato():
     assert msg["cmd"] == "liberar_proximo"
     assert "args" not in msg
     assert decodificar(codificar(msg), tipos=TIPOS_DA_UI) == msg
+
+
+# --- comandos de registro de cartela ---------------------------------------
+
+
+def test_comandos_de_registro_montam_envelopes_do_contrato():
+    mensagens = (
+        comando_iniciar_registro("Losartana"),
+        comando_registrar_leitura("abc123", 8),
+        comando_registrar_manual("abc123", 6),
+        comando_confirmar_registro("abc123"),
+    )
+    for msg in mensagens:
+        assert msg["type"] == "comando"
+        assert msg["cmd"] in COMANDOS_REGISTRO
+        assert decodificar(codificar(msg), tipos=TIPOS_DA_UI) == msg
+
+    assert mensagens[0]["args"] == {"medicamento": "Losartana"}
+    assert mensagens[1]["args"] == {"registroId": "abc123", "quantidade": 8}
+    assert mensagens[3]["args"] == {"registroId": "abc123"}
+
+
+def test_iniciar_registro_sem_medicamento_nao_envia_args():
+    assert "args" not in comando_iniciar_registro()
 
 
 # --- comando `simular` (ADR 015, painel de desenvolvimento) ------------------

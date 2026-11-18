@@ -176,6 +176,12 @@ abstract class DetectorConsumo {
   /// Emite quando a leitura da câmera ficou estável (status informativo).
   Stream<void> get confirmacoes;
 
+  /// A última leitura estável, com a contagem de comprimidos.
+  ///
+  /// Usada no registro de cartela: a UI envia a contagem ao core, mas quem
+  /// decide o slot e confirma a colocação é o painel/CLI.
+  Stream<Leitura> get leituras => const Stream<Leitura>.empty();
+
   /// Emite o JPEG anotado do preview (vazio quando `preview` está desligado).
   Stream<Uint8List> get quadros;
 
@@ -202,6 +208,9 @@ class DetectorConsumoNulo implements DetectorConsumo {
   Stream<void> get confirmacoes => const Stream<void>.empty();
 
   @override
+  Stream<Leitura> get leituras => const Stream<Leitura>.empty();
+
+  @override
   Stream<Uint8List> get quadros => const Stream<Uint8List>.empty();
 
   @override
@@ -223,6 +232,7 @@ class DetectorConsumoNulo implements DetectorConsumo {
 /// Detector controlável para testes (não abre câmera nem processo).
 class DetectorConsumoFake implements DetectorConsumo {
   final _controller = StreamController<void>.broadcast();
+  final _leiturasController = StreamController<Leitura>.broadcast();
   final _quadrosController = StreamController<Uint8List>.broadcast();
   final _avisosController = StreamController<String>.broadcast();
 
@@ -232,6 +242,9 @@ class DetectorConsumoFake implements DetectorConsumo {
 
   @override
   Stream<void> get confirmacoes => _controller.stream;
+
+  @override
+  Stream<Leitura> get leituras => _leiturasController.stream;
 
   @override
   Stream<Uint8List> get quadros => _quadrosController.stream;
@@ -255,8 +268,14 @@ class DetectorConsumoFake implements DetectorConsumo {
   }
 
   /// Simula a câmera com uma leitura estável.
-  void confirmar() {
+  void confirmar({Leitura leitura = const Leitura(10, 0)}) {
     if (!_controller.isClosed) _controller.add(null);
+    if (!_leiturasController.isClosed) _leiturasController.add(leitura);
+  }
+
+  /// Simula uma leitura estável sem emitir o status de dose.
+  void emitirLeitura(Leitura leitura) {
+    if (!_leiturasController.isClosed) _leiturasController.add(leitura);
   }
 
   /// Simula um quadro do preview ao vivo.
@@ -272,6 +291,7 @@ class DetectorConsumoFake implements DetectorConsumo {
   @override
   Future<void> dispose() async {
     await _controller.close();
+    await _leiturasController.close();
     await _quadrosController.close();
     await _avisosController.close();
   }
@@ -290,6 +310,7 @@ class DetectorConsumoProcesso implements DetectorConsumo {
   final ConfiguracaoVisao config;
   final EstabilidadeLeitura _estabilidade;
   final _controller = StreamController<void>.broadcast();
+  final _leiturasController = StreamController<Leitura>.broadcast();
   final _quadrosController = StreamController<Uint8List>.broadcast();
   final _avisosController = StreamController<String>.broadcast();
   final _ultimosErros = <String>[];
@@ -300,6 +321,9 @@ class DetectorConsumoProcesso implements DetectorConsumo {
 
   @override
   Stream<void> get confirmacoes => _controller.stream;
+
+  @override
+  Stream<Leitura> get leituras => _leiturasController.stream;
 
   @override
   Stream<Uint8List> get quadros => _quadrosController.stream;
@@ -409,8 +433,9 @@ class DetectorConsumoProcesso implements DetectorConsumo {
     if (quadro != null && !_quadrosController.isClosed) {
       _quadrosController.add(quadro);
     }
-    if (_estabilidade.registrar(leitura) && !_controller.isClosed) {
-      _controller.add(null);
+    if (_estabilidade.registrar(leitura)) {
+      if (!_controller.isClosed) _controller.add(null);
+      if (!_leiturasController.isClosed) _leiturasController.add(leitura);
     }
   }
 
@@ -434,6 +459,7 @@ class DetectorConsumoProcesso implements DetectorConsumo {
   Future<void> dispose() async {
     parar();
     await _controller.close();
+    await _leiturasController.close();
     await _quadrosController.close();
     await _avisosController.close();
   }
