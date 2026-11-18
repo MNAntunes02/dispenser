@@ -6,7 +6,7 @@ set -euo pipefail
 
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${DISPENSER_ENV_PATH:-$RAIZ/.env}"
-BUNDLE="${DISPENSER_UI_BUNDLE:-$RAIZ/ui/pi3-64}"
+BUNDLE="${DISPENSER_UI_BUNDLE:-$RAIZ/ui/build/flutter-pi/pi3-64}"
 
 if [[ -r "$ENV_FILE" ]]; then
   set -a

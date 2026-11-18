@@ -421,7 +421,12 @@ class DetectorConsumoProcesso implements DetectorConsumo {
     _processo = null;
     _linhas?.cancel();
     _linhas = null;
-    processo?.kill();
+    if (processo != null) {
+      processo.kill();
+      Timer(const Duration(seconds: 3), () {
+        processo.kill(ProcessSignal.sigkill);
+      });
+    }
     _estabilidade.reiniciar();
   }
 

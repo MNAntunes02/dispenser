@@ -642,16 +642,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--modelo", default="best_ncnn_model")
     parser.add_argument("--camera", type=int, default=0, help="número da câmera (libcamera)")
-    # Defaults para o Pi 3B: captura em 720p e frame de inferência próximo da
-    # entrada fixa do NCNN (800x800). Em 3280x2464 o loop gasta a maior parte
-    # do tempo copiando/redimensionando o frame; os argumentos continuam
-    # sobrescrevíveis.
-    parser.add_argument("--imgsz", type=int, default=480)
+    # Defaults para o Pi 3B: captura em 720p e inferência em 320x240. Em
+    # 3280x2464 os buffers CMA (RGB888 + RAW) não cabem com folga na Pi 3B de
+    # 1 GB; os argumentos continuam sobrescrevíveis.
+    parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--conf", type=float, default=0.5)
-    parser.add_argument("--largura", type=int, default=3280)
-    parser.add_argument("--altura", type=int, default=2464)
-    parser.add_argument("--infer-largura", type=int, default=480)
-    parser.add_argument("--infer-altura", type=int, default=360)
+    parser.add_argument("--largura", type=int, default=1280)
+    parser.add_argument("--altura", type=int, default=720)
+    parser.add_argument("--infer-largura", type=int, default=320)
+    parser.add_argument("--infer-altura", type=int, default=240)
     parser.add_argument("--fps-camera", type=float, default=15)
     parser.add_argument(
         "--awb",

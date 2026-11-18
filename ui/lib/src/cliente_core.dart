@@ -50,7 +50,7 @@ class ClienteCore {
   ClienteCore(
     this.canal, {
     this.caminho = 'core',
-    this.intervaloHealth = const Duration(seconds: 6),
+    this.intervaloHealth = const Duration(seconds: 20),
   });
 
   final CanalCore canal;

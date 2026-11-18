@@ -36,3 +36,12 @@ LIBGL_ALWAYS_SOFTWARE=1 FLUTTER_ENGINE_SWITCHES=1 FLUTTER_ENGINE_SWITCH_1="enabl
 
 SCRIPT:
 DISPENSER_SOCKET=/home/pi/Desktop/dispenser/.run/core.sock flutter-pi --release ~/Desktop/dispenser/ui/pi3-64
+
+
+sudo systemctl stop lightdm
+DISPENSER_VISAO_SCRIPT=/home/pi/Desktop/dispenser/detecta_pill/detecta_pill_picamera2.py   DISPENSER_VISAO_PYTHON=/home/pi/Desktop/dispenser/detecta_pill/.venv/bin/python   DISPENSER_VISAO_MODELO=/home/pi/Desktop/dispenser/detecta_pill/best_ncnn_model   DISPENSER_VISAO_CAMERA=0 DISPENSER_VISAO_PREVIEW=1   DISPENSER_SOCKET=/home/pi/Desktop/dispenser/.run/core.sock flutter-pi --release .
+
+
+sudo systemctl stop lightdm
+cd /home/pi/Desktop/dispenser/ui/build/flutter-pi/aarch64-generic
+DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/1000 ./flutter-pi .

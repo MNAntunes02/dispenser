@@ -116,7 +116,7 @@ class ControladorUI extends ChangeNotifier {
     this.cliente, {
     DateTime Function()? relogio,
     DetectorConsumo? detector,
-    this.limiteSemTela = const Duration(seconds: 5),
+    this.limiteSemTela = const Duration(seconds: 10),
     this.intervaloVigia = const Duration(seconds: 1),
     this.maxTentativasSemTela = 2,
   }) : _agora = relogio ?? DateTime.now,
