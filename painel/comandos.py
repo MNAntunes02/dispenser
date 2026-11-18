@@ -17,7 +17,15 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from core.protocolo_ui import codificar, comando_liberar_proximo, comando_simular
+from core.protocolo_ui import (
+    codificar,
+    comando_confirmar_registro,
+    comando_iniciar_registro,
+    comando_liberar_proximo,
+    comando_registrar_leitura,
+    comando_registrar_manual,
+    comando_simular,
+)
 from painel.textos import texto
 
 #: Conectar/enviar/fechar tem que ser rápido: o painel nunca deixa a janela
@@ -53,6 +61,57 @@ class ComandosCore:
             name=f"painel-simular:{evento}",
             daemon=True,
         ).start()
+
+    def iniciar_registro(
+        self, medicamento: str = "", *, assincrono: bool = True
+    ) -> bool:
+        """Inicia a leitura da cartela (painel ou script)."""
+        return self._enviar_ou_thread(
+            comando_iniciar_registro(medicamento or None),
+            "painel-iniciar-registro",
+            assincrono,
+        )
+
+    def registrar_leitura(
+        self, registro_id: str, quantidade: int, *, assincrono: bool = True
+    ) -> bool:
+        """Envia a contagem lida pela câmera (chamado pela UI/painel)."""
+        return self._enviar_ou_thread(
+            comando_registrar_leitura(registro_id, quantidade),
+            "painel-registrar-leitura",
+            assincrono,
+        )
+
+    def registrar_manual(
+        self, registro_id: str, quantidade: int, *, assincrono: bool = True
+    ) -> bool:
+        """Fallback sem câmera: quantidade informada pelo operador."""
+        return self._enviar_ou_thread(
+            comando_registrar_manual(registro_id, quantidade),
+            "painel-registrar-manual",
+            assincrono,
+        )
+
+    def confirmar_registro(
+        self, registro_id: str = "", *, assincrono: bool = True
+    ) -> bool:
+        """Confirma que a cartela foi colocada no slot indicado pelo core."""
+        return self._enviar_ou_thread(
+            comando_confirmar_registro(registro_id),
+            "painel-confirmar-registro",
+            assincrono,
+        )
+
+    def _enviar_ou_thread(self, msg: dict, nome: str, assincrono: bool) -> bool:
+        if assincrono:
+            threading.Thread(
+                target=self._enviar,
+                args=(msg,),
+                name=nome,
+                daemon=True,
+            ).start()
+            return True
+        return self._enviar(msg)
 
     def liberar_proximo(self, *, assincrono: bool = True) -> bool:
         """Envia a liberação do passo de detecção (painel ou CLI).

@@ -60,6 +60,17 @@ TEXTOS: dict[str, str] = {
     "simulado_slot": "simulação enviada ao core: {acao} (slot {slot})",
     "erro_simular": "falha ao enviar simulação: {erro}",
     "erro_comando": "falha ao enviar comando: {erro}",
+    # Registro de estoque
+    "registro_estoque": "Registro de estoque (12 slots)",
+    "registro_medicamento": "Medicamento:",
+    "registro_iniciar": "Iniciar registro",
+    "registro_iniciado": "registro iniciado; posicione a cartela na detecção",
+    "registro_quantidade": "Quantidade:",
+    "registro_enviar": "Enviar quantidade manual",
+    "registro_enviado": "quantidade enviada ao core",
+    "registro_quantidade_invalida": "quantidade inválida (use 1 a 999)",
+    "registro_confirmar": "Confirmar colocação no slot",
+    "registro_confirmado": "confirmação enviada ao core",
     # Mensagens do gerenciador de processos
     "ja_rodando": "{servico} já está rodando (PID {pid})",
     "falha_iniciar": "falha ao iniciar: {erro}",

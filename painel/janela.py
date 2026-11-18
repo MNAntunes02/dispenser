@@ -94,7 +94,7 @@ class Aplicacao:
         self._janela.geometry("1150x760")
         self._janela.minsize(900, 600)
         self._janela.columnconfigure(0, weight=1)
-        self._janela.rowconfigure(2, weight=1)
+        self._janela.rowconfigure(4, weight=1)
 
         self._configurar_estilos()
         self._construir_cabecalho()
@@ -154,6 +154,14 @@ class Aplicacao:
         )
         simulador.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self._construir_simulador(simulador)
+
+        registro = ttk.LabelFrame(
+            quadro,
+            text=TEXTOS["registro_estoque"],
+            padding=8,
+        )
+        registro.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self._construir_registro(registro)
 
     def _construir_cartao(self, pai: ttk.Frame, nome: str, coluna: int) -> None:
         cartao = ttk.LabelFrame(
@@ -262,6 +270,74 @@ class Aplicacao:
         liberar.pack(anchor="w", pady=(4, 0))
         self._botoes_simulador.append(liberar)
 
+    def _construir_registro(self, pai: ttk.LabelFrame) -> None:
+        """Controles para iniciar, informar e confirmar uma cartela."""
+        linha = ttk.Frame(pai)
+        linha.pack(fill="x")
+
+        ttk.Label(linha, text=TEXTOS["registro_medicamento"]).pack(side="left")
+        self._medicamento_var = tk.StringVar(master=self._janela)
+        ttk.Entry(linha, textvariable=self._medicamento_var, width=28).pack(
+            side="left", padx=(4, 10)
+        )
+        ttk.Button(
+            linha,
+            text=TEXTOS["registro_iniciar"],
+            command=self._iniciar_registro,
+        ).pack(side="left", padx=(0, 10))
+
+        ttk.Label(linha, text=TEXTOS["registro_quantidade"]).pack(side="left")
+        self._quantidade_var = tk.StringVar(master=self._janela, value="10")
+        ttk.Spinbox(
+            linha,
+            from_=1,
+            to=999,
+            textvariable=self._quantidade_var,
+            width=6,
+        ).pack(side="left", padx=(4, 10))
+        ttk.Button(
+            linha,
+            text=TEXTOS["registro_enviar"],
+            command=self._enviar_quantidade_manual,
+        ).pack(side="left", padx=(0, 10))
+        ttk.Button(
+            linha,
+            text=TEXTOS["registro_confirmar"],
+            command=self._confirmar_registro,
+        ).pack(side="left")
+
+    def _iniciar_registro(self) -> None:
+        self._comandos.iniciar_registro(self._medicamento_var.get().strip())
+        self._registrar_linha(
+            "core", "painel", texto("registro_iniciado")
+        )
+
+    def _quantidade_selecionada(self) -> int | None:
+        try:
+            quantidade = int(self._quantidade_var.get())
+        except ValueError:
+            self._registrar_linha(
+                "core", "painel", texto("registro_quantidade_invalida")
+            )
+            return None
+        if not 1 <= quantidade <= 999:
+            self._registrar_linha(
+                "core", "painel", texto("registro_quantidade_invalida")
+            )
+            return None
+        return quantidade
+
+    def _enviar_quantidade_manual(self) -> None:
+        quantidade = self._quantidade_selecionada()
+        if quantidade is None:
+            return
+        self._comandos.registrar_manual("", quantidade)
+        self._registrar_linha("core", "painel", texto("registro_enviado"))
+
+    def _confirmar_registro(self) -> None:
+        self._comandos.confirmar_registro("")
+        self._registrar_linha("core", "painel", texto("registro_confirmado"))
+
     def _liberar_proximo(self) -> None:
         """Libera o passo de detecção (câmera é apoio, operador decide)."""
         self._comandos.liberar_proximo()
@@ -290,7 +366,7 @@ class Aplicacao:
 
     def _construir_logs(self) -> None:
         caderno = ttk.Notebook(self._janela)
-        caderno.grid(row=2, column=0, sticky="nsew", padx=12, pady=4)
+        caderno.grid(row=4, column=0, sticky="nsew", padx=12, pady=4)
         for nome in ("core", "ui"):
             self._construir_aba_log(caderno, nome)
 
@@ -362,7 +438,7 @@ class Aplicacao:
 
     def _construir_rodape(self) -> None:
         rodape = ttk.Frame(self._janela, padding=(12, 0, 12, 10))
-        rodape.grid(row=3, column=0, sticky="ew")
+        rodape.grid(row=5, column=0, sticky="ew")
         ttk.Label(
             rodape,
             text=texto("pasta_dev", caminho=DIR_DEV),
