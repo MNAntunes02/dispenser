@@ -16,5 +16,32 @@ For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
 
-SCRIPT:
+## Rodar no Raspberry Pi (flutter-pi)
+
+Use o launcher para que a UI receba as variáveis `DISPENSER_VISAO_*` do `.env`
+(detecção de consumo do passo 4) e o `DISPENSER_SOCKET`:
+
+```sh
+./ui/run_pi.sh
+```
+
+Ele carrega do `.env` somente essas chaves, sem repassar credenciais do backend
+para a UI. Para usar outro bundle: `DISPENSER_UI_BUNDLE=/caminho/do/bundle ./ui/run_pi.sh`.
+
+## Rodar o bundle Linux/arm64 (debug)
+
+```sh
 LIBGL_ALWAYS_SOFTWARE=1 FLUTTER_ENGINE_SWITCHES=1 FLUTTER_ENGINE_SWITCH_1="enable-impeller=false" ./build/linux/arm64/debug/bundle/dispenser_ui
+```
+
+SCRIPT:
+DISPENSER_SOCKET=/home/pi/Desktop/dispenser/.run/core.sock flutter-pi --release ~/Desktop/dispenser/ui/pi3-64
+
+
+sudo systemctl stop lightdm
+DISPENSER_VISAO_SCRIPT=/home/pi/Desktop/dispenser/detecta_pill/detecta_pill_picamera2.py   DISPENSER_VISAO_PYTHON=/home/pi/Desktop/dispenser/detecta_pill/.venv/bin/python   DISPENSER_VISAO_MODELO=/home/pi/Desktop/dispenser/detecta_pill/best_ncnn_model   DISPENSER_VISAO_CAMERA=0 DISPENSER_VISAO_PREVIEW=1   DISPENSER_SOCKET=/home/pi/Desktop/dispenser/.run/core.sock flutter-pi --release .
+
+
+sudo systemctl stop lightdm
+cd /home/pi/Desktop/dispenser/ui/build/flutter-pi/aarch64-generic
+DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/1000 ./flutter-pi .

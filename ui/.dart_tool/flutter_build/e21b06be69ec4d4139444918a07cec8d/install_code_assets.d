@@ -1,1 +1,0 @@
- /home/alissonantunes/Área\ de\ Trabalho/dispenser/ui/.dart_tool/flutter_build/e21b06be69ec4d4139444918a07cec8d/native_assets.json: 

@@ -1,12 +1,12 @@
-/// Detecção de consumo do passo 4 (câmera + YOLO via subprocesso Python).
+/// Detecção de consumo do passo 2 (câmera + YOLO via subprocesso Python).
 ///
-/// Regra de segurança do paciente (ADR 009): a UI **não decide** a dose. Quando
-/// a leitura da câmera fica estável, a UI apenas envia o mesmo `input:confirma`
-/// do botão OK — o core continua validando com os sensores. O botão OK segue
-/// disponível como fallback: sem câmera, o comportamento é o de sempre.
+/// Regra de segurança do paciente (ADR 009/017): a UI **não decide** a dose.
+/// A câmera é apoio visual do operador; quando a leitura fica estável, a UI
+/// apenas mostra o status "aguardando liberação". Quem confirma o consumo é o
+/// painel/CLI, por um comando explícito ao core.
 ///
 /// A inferência (picamera2 + YOLO) roda em Python (`detecta_pill/`), iniciado
-/// como subprocesso só durante o passo 4. Ele imprime uma linha NDJSON por
+/// como subprocesso só durante o passo 2. Ele imprime uma linha NDJSON por
 /// frame (`{"pill":N,"no_pill":M}`); a estabilidade é decidida aqui em Dart
 /// (ver [EstabilidadeLeitura]).
 library;
@@ -72,14 +72,15 @@ Uint8List? _decodificarQuadro(Object? bruto) {
 
 /// Regra de estabilidade da detecção de consumo.
 ///
-/// Confirma quando a **mesma** leitura se repete por [frames] quadros seguidos,
-/// exigindo ao menos [minPilulas] comprimidos — evita confirmar com a câmera
-/// ligada sem ler nenhuma cartela. Qualquer leitura diferente reinicia a
-/// contagem; uma leitura sem comprimido também zera a janela.
+/// Avisa quando a **mesma** leitura se repete por [frames] quadros seguidos.
+///
+/// Com [minPilulas] > 0, leituras abaixo do mínimo zeram a janela (evita
+/// avisar com a câmera ligada sem ler nenhuma cartela). O fluxo novo usa o
+/// padrão 0: qualquer leitura estável é suficiente para o operador decidir.
 class EstabilidadeLeitura {
-  EstabilidadeLeitura({this.frames = 30, this.minPilulas = 1})
-      : assert(frames > 0),
-        assert(minPilulas > 0);
+  EstabilidadeLeitura({this.frames = 30, this.minPilulas = 0})
+    : assert(frames > 0),
+      assert(minPilulas >= 0);
 
   final int frames;
   final int minPilulas;
@@ -90,7 +91,7 @@ class EstabilidadeLeitura {
   void reiniciar() => _janela.clear();
 
   /// Registra uma leitura. Devolve `true` no instante em que a condição é
-  /// atingida — e reinicia a janela para não confirmar de novo.
+  /// atingida — e reinicia a janela para não repetir o aviso.
   bool registrar(Leitura leitura) {
     if (leitura.pill < minPilulas) {
       _janela.clear();
@@ -132,17 +133,18 @@ class ConfiguracaoVisao {
   final int frames;
   final int minPilulas;
 
-  /// Pede o JPEG anotado junto do NDJSON (preview ao vivo do passo 4).
+  /// Pede o JPEG anotado junto do NDJSON (preview ao vivo do passo 2).
   final bool preview;
 
   /// Quadros de preview por segundo (0 = todo frame).
   final double previewFps;
 
   /// Lê `DISPENSER_VISAO_*` do ambiente. Sem `DISPENSER_VISAO_SCRIPT` a
-  /// detecção fica desligada (o comportamento é o de hoje: só o botão OK).
+  /// detecção fica desligada; a liberação manual continua disponível.
   factory ConfiguracaoVisao.doAmbiente(Map<String, String> ambiente) {
     final script = (ambiente['DISPENSER_VISAO_SCRIPT'] ?? '').trim();
-    final ligada = _bool(ambiente['DISPENSER_VISAO_ATIVA']) ?? script.isNotEmpty;
+    final ligada =
+        _bool(ambiente['DISPENSER_VISAO_ATIVA']) ?? script.isNotEmpty;
     return ConfiguracaoVisao(
       ativo: ligada && script.isNotEmpty,
       python: (ambiente['DISPENSER_VISAO_PYTHON'] ?? 'python3').trim(),
@@ -151,7 +153,7 @@ class ConfiguracaoVisao {
       camera: _int(ambiente['DISPENSER_VISAO_CAMERA']) ?? 0,
       conf: _double(ambiente['DISPENSER_VISAO_CONF']) ?? 0.5,
       frames: _int(ambiente['DISPENSER_VISAO_FRAMES']) ?? 30,
-      minPilulas: _int(ambiente['DISPENSER_VISAO_MIN_PILL']) ?? 1,
+      minPilulas: _int(ambiente['DISPENSER_VISAO_MIN_PILL']) ?? 0,
       preview: _bool(ambiente['DISPENSER_VISAO_PREVIEW']) ?? true,
       previewFps: _double(ambiente['DISPENSER_VISAO_PREVIEW_FPS']) ?? 5,
     );
@@ -168,25 +170,31 @@ int? _int(String? valor) => int.tryParse((valor ?? '').trim());
 
 double? _double(String? valor) => double.tryParse((valor ?? '').trim());
 
-/// Fonte de confirmação por visão. A UI só envia `confirma` quando este stream
-/// emite — nunca por conta própria.
+/// Fonte de estabilidade da visão. O stream é informativo: a UI mostra o
+/// status, mas não confirma a dose (a liberação é do painel/CLI).
 abstract class DetectorConsumo {
-  /// Emite quando a leitura da câmera ficou estável (vira o OK do passo 4).
+  /// Emite quando a leitura da câmera ficou estável (status informativo).
   Stream<void> get confirmacoes;
 
   /// Emite o JPEG anotado do preview (vazio quando `preview` está desligado).
   Stream<Uint8List> get quadros;
 
-  /// Liga a detecção (chamado ao entrar no passo 4). Idempotente.
+  /// Mensagens de diagnóstico da câmera (stderr e falhas do subprocesso).
+  Stream<String> get avisos => const Stream<String>.empty();
+
+  /// A detecção está ligada e deveria haver uma câmera rodando.
+  bool get ativo => false;
+
+  /// Liga a detecção (chamado ao entrar no passo 2). Idempotente.
   void iniciar();
 
-  /// Desliga a detecção (ao sair do passo 4 ou cair a conexão).
+  /// Desliga a detecção (ao sair do passo 2 ou cair a conexão).
   void parar();
 
   Future<void> dispose();
 }
 
-/// Detecção desligada: nada é confirmado por visão (o OK manual continua).
+/// Detecção desligada: nenhuma leitura estável é produzida.
 class DetectorConsumoNulo implements DetectorConsumo {
   const DetectorConsumoNulo();
 
@@ -195,6 +203,12 @@ class DetectorConsumoNulo implements DetectorConsumo {
 
   @override
   Stream<Uint8List> get quadros => const Stream<Uint8List>.empty();
+
+  @override
+  Stream<String> get avisos => const Stream<String>.empty();
+
+  @override
+  bool get ativo => false;
 
   @override
   void iniciar() {}
@@ -210,9 +224,11 @@ class DetectorConsumoNulo implements DetectorConsumo {
 class DetectorConsumoFake implements DetectorConsumo {
   final _controller = StreamController<void>.broadcast();
   final _quadrosController = StreamController<Uint8List>.broadcast();
+  final _avisosController = StreamController<String>.broadcast();
 
   int inicios = 0;
   int paradas = 0;
+  bool _ligado = false;
 
   @override
   Stream<void> get confirmacoes => _controller.stream;
@@ -221,12 +237,24 @@ class DetectorConsumoFake implements DetectorConsumo {
   Stream<Uint8List> get quadros => _quadrosController.stream;
 
   @override
-  void iniciar() => inicios++;
+  Stream<String> get avisos => _avisosController.stream;
 
   @override
-  void parar() => paradas++;
+  bool get ativo => _ligado;
 
-  /// Simula a câmera reconhecendo o consumo (leitura estável).
+  @override
+  void iniciar() {
+    _ligado = true;
+    inicios++;
+  }
+
+  @override
+  void parar() {
+    _ligado = false;
+    paradas++;
+  }
+
+  /// Simula a câmera com uma leitura estável.
   void confirmar() {
     if (!_controller.isClosed) _controller.add(null);
   }
@@ -236,26 +264,35 @@ class DetectorConsumoFake implements DetectorConsumo {
     if (!_quadrosController.isClosed) _quadrosController.add(quadro);
   }
 
+  /// Simula uma falha da câmera.
+  void emitirAviso(String aviso) {
+    if (!_avisosController.isClosed) _avisosController.add(aviso);
+  }
+
   @override
   Future<void> dispose() async {
     await _controller.close();
     await _quadrosController.close();
+    await _avisosController.close();
   }
 }
 
 /// Detector real: dispara o script Python e lê as leituras NDJSON.
 class DetectorConsumoProcesso implements DetectorConsumo {
   DetectorConsumoProcesso(this.config, {EstabilidadeLeitura? estabilidade})
-      : _estabilidade = estabilidade ??
-            EstabilidadeLeitura(
-              frames: config.frames,
-              minPilulas: config.minPilulas,
-            );
+    : _estabilidade =
+          estabilidade ??
+          EstabilidadeLeitura(
+            frames: config.frames,
+            minPilulas: config.minPilulas,
+          );
 
   final ConfiguracaoVisao config;
   final EstabilidadeLeitura _estabilidade;
   final _controller = StreamController<void>.broadcast();
   final _quadrosController = StreamController<Uint8List>.broadcast();
+  final _avisosController = StreamController<String>.broadcast();
+  final _ultimosErros = <String>[];
 
   Process? _processo;
   StreamSubscription<String>? _linhas;
@@ -268,14 +305,44 @@ class DetectorConsumoProcesso implements DetectorConsumo {
   Stream<Uint8List> get quadros => _quadrosController.stream;
 
   @override
+  Stream<String> get avisos => _avisosController.stream;
+
+  @override
+  bool get ativo => _deveRodar && config.ativo;
+
+  @override
   void iniciar() {
     if (!config.ativo || _deveRodar) return;
     _deveRodar = true;
+    _ultimosErros.clear();
     _estabilidade.reiniciar();
     unawaited(_iniciarProcesso());
   }
 
+  void _registrarLog(String mensagem) {
+    final texto = _resumir(mensagem);
+    if (texto.isEmpty) return;
+    stderr.writeln('[visao] $texto');
+  }
+
+  void _registrarAviso(String mensagem) {
+    final texto = _resumir(mensagem);
+    if (texto.isEmpty) return;
+    _registrarLog(texto);
+    if (!_avisosController.isClosed) _avisosController.add(texto);
+  }
+
+  void _guardarErro(String linha) {
+    final texto = _resumir(linha);
+    if (texto.isEmpty) return;
+    _ultimosErros.add(texto);
+    if (_ultimosErros.length > 8) _ultimosErros.removeAt(0);
+  }
+
   Future<void> _iniciarProcesso() async {
+    _registrarLog(
+      'iniciando ${config.script} (camera=${config.camera}, modelo=${config.modelo})',
+    );
     try {
       final processo = await Process.start(config.python, <String>[
         config.script,
@@ -298,27 +365,46 @@ class DetectorConsumoProcesso implements DetectorConsumo {
         return;
       }
       _processo = processo;
+      _registrarLog('câmera iniciada (pid ${processo.pid})');
       _linhas = processo.stdout
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen(_tratarLinha);
-      // Drena o stderr para o processo não travar se o pipe encher.
-      unawaited(processo.stderr.drain<void>());
-      unawaited(processo.exitCode.then((_) {
-        if (identical(_processo, processo)) {
+      processo.stderr
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((linha) {
+            _guardarErro(linha);
+            _registrarAviso('stderr: $linha');
+          });
+      unawaited(
+        processo.exitCode.then((codigo) {
+          if (!identical(_processo, processo)) return;
           _processo = null;
           _linhas = null;
-        }
-      }));
-    } on ProcessException {
-      // Sem câmera/script: fica sem confirmação e o OK manual segue valendo.
+          if (!_deveRodar) return;
+          final ultimo = _ultimosErros.isEmpty
+              ? ''
+              : ' — ${_ultimosErros.last}';
+          _registrarAviso('câmera encerrou (código $codigo)$ultimo');
+        }),
+      );
+    } on ProcessException catch (erro) {
+      // Sem câmera/script: o status mostra a falha; a liberação manual segue.
       _processo = null;
+      _registrarAviso('não foi possível iniciar a câmera: ${erro.message}');
     }
   }
 
   void _tratarLinha(String linha) {
     final leitura = leituraDeLinha(linha);
-    if (leitura == null) return;
+    if (leitura == null) {
+      final texto = linha.trim();
+      if (texto.isNotEmpty && !texto.startsWith('{')) {
+        _registrarLog(texto);
+      }
+      return;
+    }
     final quadro = leitura.quadro;
     if (quadro != null && !_quadrosController.isClosed) {
       _quadrosController.add(quadro);
@@ -335,7 +421,12 @@ class DetectorConsumoProcesso implements DetectorConsumo {
     _processo = null;
     _linhas?.cancel();
     _linhas = null;
-    processo?.kill();
+    if (processo != null) {
+      processo.kill();
+      Timer(const Duration(seconds: 3), () {
+        processo.kill(ProcessSignal.sigkill);
+      });
+    }
     _estabilidade.reiniciar();
   }
 
@@ -344,7 +435,14 @@ class DetectorConsumoProcesso implements DetectorConsumo {
     parar();
     await _controller.close();
     await _quadrosController.close();
+    await _avisosController.close();
   }
+}
+
+String _resumir(String texto) {
+  final limpo = texto.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (limpo.length <= 300) return limpo;
+  return '${limpo.substring(0, 297)}...';
 }
 
 /// Cria o detector a partir do ambiente: processo real se ativo, senão nulo.

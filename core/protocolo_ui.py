@@ -9,7 +9,7 @@ Princípios (regra de segurança do paciente):
   texto de domínio, não traduz e não decide o passo do fluxo.
 - A UI só envia intenção de botão (`input`) e comandos de depuração
   (`comando`); ela nunca confirma uma dose por conta própria.
-- `passo` (1..6) é calculado no core para que a UI não precise conhecer a
+- `passo` (1..4) é calculado no core para que a UI não precise conhecer a
   máquina de estados.
 """
 
@@ -48,17 +48,14 @@ EVENTOS_SIMULAVEIS_COM_SLOT = ("slot_presente", "slot_ausente")
 
 #: Passo do fluxo guiado (spec 05) por chave de texto. `None` = fora do fluxo.
 PASSO_POR_CHAVE: dict[str, int | None] = {
-    "hora_remedio": 1,
-    "abra_gaveta": 2,
-    "retire_medicamento": 3,
-    "retire_medicamento_sem_slot": 3,
-    "tome_e_ok": 4,
-    "devolva_slot": 5,
-    "devolva_slot_sem_slot": 5,
-    "aviso_retorno": 5,
-    "aviso_retorno_sem_slot": 5,
-    "tudo_certo": 6,
-    "tudo_certo_fim": 6,
+    "abra_gaveta": 1,
+    "consuma_e_detectar": 2,
+    "devolva_slot": 3,
+    "devolva_slot_sem_slot": 3,
+    "aviso_retorno": 3,
+    "aviso_retorno_sem_slot": 3,
+    "tudo_certo": 4,
+    "tudo_certo_fim": 4,
     "gaveta_fora_de_horario": None,
     "falha": None,
     "relogio_nao_confiavel": None,
@@ -70,9 +67,7 @@ PASSO_POR_CHAVE: dict[str, int | None] = {
 #: Fases em que há uma dose em andamento exibida na tela (retrato da UI).
 FASES_COM_DOSE = (
     "ALARME",
-    "AGUARDANDO_GAVETA",
-    "GAVETA_ABERTA",
-    "MEDICAMENTO_RETIRADO",
+    "AGUARDANDO_DETECCAO",
     "AGUARDANDO_RETORNO",
     "RETORNO_PENDENTE",
     "CONCLUIDA",
@@ -126,8 +121,17 @@ def decodificar(linha: str, *, tipos: Iterable[str] | None = None) -> dict:
 
 
 def passo_de(chave: str | None) -> int | None:
-    """Passo 1..6 do fluxo guiado a partir da chave de texto (ou `None`)."""
+    """Passo 1..4 do fluxo guiado a partir da chave de texto (ou `None`)."""
     return PASSO_POR_CHAVE.get(chave) if chave else None
+
+
+def comando_liberar_proximo() -> dict:
+    """Monta o comando que libera o passo de detecção (painel/CLI).
+
+    O core só aceita em `AGUARDANDO_DETECCAO`; a câmera é apoio visual e a
+    confirmação do consumo é a ação explícita do operador.
+    """
+    return envelope("comando", cmd="liberar_proximo")
 
 
 def comando_simular(evento: str, slot: int | None = None) -> dict:

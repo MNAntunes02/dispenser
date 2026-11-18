@@ -7,11 +7,10 @@ apenas a chave + parâmetros; a renderização ocorre no orquestrador/UI.
 from __future__ import annotations
 
 TEXTOS: dict[str, str] = {
-    "hora_remedio": "Hora do remédio: {nome} ({dosagem})",
     "abra_gaveta": "Abra a gaveta",
-    "retire_medicamento": "Retire o medicamento do slot {slot}",
-    "retire_medicamento_sem_slot": "Retire o medicamento",
-    "tome_e_ok": "Tome o medicamento e pressione OK",
+    "consuma_e_detectar": (
+        "Consuma o medicamento e coloque a cartela na posição de detecção"
+    ),
     "devolva_slot": "Devolva ao slot {slot} e feche a gaveta",
     "devolva_slot_sem_slot": "Devolva o medicamento e feche a gaveta",
     "tudo_certo": "Tudo certo! Próxima dose às {proxima}",
@@ -75,7 +74,7 @@ def plural_doses(n: int) -> str:
     return _DOSE if n == 1 else _DOSES.format(n=n)
 
 #: Total de passos do fluxo guiado (spec 05).
-TOTAL_PASSOS = 6
+TOTAL_PASSOS = 4
 
 
 def texto(chave: str, **params: object) -> str:

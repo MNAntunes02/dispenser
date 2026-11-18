@@ -2,8 +2,8 @@
 
 Executa o coordenador com ponte simulada e agenda uma dose para daqui a
 alguns segundos. Com `--socket`, sobe o mesmo socket da Fase 5 e conecta
-nele uma "mini UI" que faz exatamente o que a UI Flutter faz: ler as telas
-publicadas e responder `input:confirma` quando o core pede um OK.
+nele uma "mini UI" que faz o que a UI Flutter faz: ler as telas publicadas e,
+no passo de detecção, enviar o comando de liberação do operador.
 
 Uso:
     python -m core.demo              # só imprime as telas
@@ -32,10 +32,8 @@ SOCKET_DEMO = Path("/run/dispenser/demo.sock")
 
 #: Sensor que o paciente provoca em cada passo do fluxo feliz.
 SCRIPT: dict[str, object] = {
-    "hora_remedio": None,  # a mini UI responde com OK
     "abra_gaveta": {"e": "gaveta_aberta"},
-    "retire_medicamento": {"e": "slot_ausente", "slot": 0},
-    "tome_e_ok": None,  # a mini UI responde com OK
+    "consuma_e_detectar": None,  # a mini UI libera o próximo passo
     "devolva_slot": [{"e": "slot_presente", "slot": 0}, {"e": "gaveta_fechada"}],
 }
 
@@ -54,10 +52,10 @@ class PublicadorEspiao:
 
 
 class MiniUI:
-    """Cliente do socket que só exibe telas e devolve o botão OK.
+    """Cliente do socket que exibe telas e libera o passo de detecção.
 
-    Espelha o comportamento do `dispenser-ui`: nunca decide o estado da
-    dose, apenas lê o que o core publica e envia a intenção do paciente.
+    Espelha o comportamento do `dispenser-ui` + painel: nunca decide o estado
+    da dose, apenas lê o que o core publica e envia a liberação do operador.
     """
 
     def __init__(self, caminho: Path) -> None:
@@ -106,8 +104,8 @@ class MiniUI:
         if msg.get("type") != "estado":
             return
         print(f"[UI] {msg.get('mensagem')}", flush=True)
-        if msg.get("esperaBotao"):
-            sock.sendall(b'{"v":1,"type":"input","acao":"confirma"}\n')
+        if msg.get("chave") == "consuma_e_detectar":
+            sock.sendall(b'{"v":1,"type":"comando","cmd":"liberar_proximo"}\n')
 
 
 def _agenda_para_hora(horario: str) -> list[dict]:
@@ -148,7 +146,6 @@ def main() -> None:
         tick_s=0.2,
         intervalo_alarme_s=120,
         max_tentativas=5,
-        timeout_gaveta_s=120,
         timeout_retorno_s=120,
         limite_retorno_s=1800,
     )
@@ -203,7 +200,7 @@ def main() -> None:
                     return
                 acao = SCRIPT.get(chave)
                 if acao is None:
-                    continue  # a mini UI responde o OK
+                    continue  # a mini UI libera o próximo passo
                 for evento in acao if isinstance(acao, list) else [acao]:
                     ponte.simular(evento)
             if servidor is not None:

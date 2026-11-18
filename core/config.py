@@ -42,7 +42,6 @@ class Config:
     tick_s: float = 5.0
     intervalo_alarme_s: int = 120
     max_tentativas: int = 5
-    timeout_gaveta_s: int = 120
     timeout_retorno_s: int = 120
     limite_retorno_s: int = 1800
     intervalo_sync_s: int = 15
@@ -66,7 +65,6 @@ class Config:
             tick_s=_float("DISPENSER_TICK_S", 5.0),
             intervalo_alarme_s=_int("DISPENSER_ALARME_INTERVALO_S", 120),
             max_tentativas=_int("DISPENSER_MAX_TENTATIVAS", 5),
-            timeout_gaveta_s=_int("DISPENSER_TIMEOUT_GAVETA_S", 120),
             timeout_retorno_s=_int("DISPENSER_TIMEOUT_RETORNO_S", 120),
             limite_retorno_s=_int("DISPENSER_LIMITE_RETORNO_S", 1800),
             intervalo_sync_s=_int("SYNC_INTERVAL_S", 15),

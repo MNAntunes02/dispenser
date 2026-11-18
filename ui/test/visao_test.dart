@@ -1,4 +1,4 @@
-/// Testes da detecção de consumo (passo 4): regra de estabilidade, leitura do
+/// Testes da detecção de consumo (passo 2): regra de estabilidade, leitura do
 /// NDJSON, configuração por ambiente e o detector real via subprocesso.
 @TestOn('vm')
 library;
@@ -51,11 +51,18 @@ void main() {
       expect(regra.registrar(const Leitura(1, 2)), isTrue);
     });
 
-    test('sem comprimido nunca confirma (câmera ligada sem ler cartela)', () {
+    test('com minPilulas=1 não confirma sem comprimido', () {
       final regra = EstabilidadeLeitura(frames: 2, minPilulas: 1);
       for (var i = 0; i < 10; i++) {
         expect(regra.registrar(const Leitura(0, 3)), isFalse);
       }
+    });
+
+    test('padrão aceita qualquer leitura estável (inclusive no_pill)', () {
+      final regra = EstabilidadeLeitura(frames: 2);
+      expect(regra.minPilulas, 0);
+      expect(regra.registrar(const Leitura(0, 3)), isFalse);
+      expect(regra.registrar(const Leitura(0, 3)), isTrue);
     });
 
     test('respeita minPilulas', () {
@@ -73,7 +80,11 @@ void main() {
 
     test('lê o frame do preview em base64', () {
       final jpeg = Uint8List.fromList(<int>[0xFF, 0xD8, 0xFF, 0xD9]);
-      final linha = jsonEncode({'pill': 2, 'no_pill': 1, 'frame': base64Encode(jpeg)});
+      final linha = jsonEncode({
+        'pill': 2,
+        'no_pill': 1,
+        'frame': base64Encode(jpeg),
+      });
 
       final leitura = leituraDeLinha(linha)!;
 
@@ -83,7 +94,9 @@ void main() {
     });
 
     test('frame inválido não invalida a contagem', () {
-      final leitura = leituraDeLinha('{"pill": 1, "no_pill": 0, "frame": "não é base64"}')!;
+      final leitura = leituraDeLinha(
+        '{"pill": 1, "no_pill": 0, "frame": "não é base64"}',
+      )!;
 
       expect(leitura.pill, 1);
       expect(leitura.noPill, 0);
@@ -94,7 +107,10 @@ void main() {
       final jpeg = Uint8List.fromList(<int>[1, 2, 3]);
 
       expect(const Leitura(2, 1, quadro: null), Leitura(2, 1, quadro: jpeg));
-      expect(const Leitura(2, 1).hashCode, Leitura(2, 1, quadro: jpeg).hashCode);
+      expect(
+        const Leitura(2, 1).hashCode,
+        Leitura(2, 1, quadro: jpeg).hashCode,
+      );
     });
 
     test('ignora linhas inválidas', () {
@@ -111,7 +127,7 @@ void main() {
       final config = ConfiguracaoVisao.doAmbiente(const {});
       expect(config.ativo, isFalse);
       expect(config.frames, 30);
-      expect(config.minPilulas, 1);
+      expect(config.minPilulas, 0);
       expect(config.python, 'python3');
       expect(config.preview, isTrue);
       expect(config.previewFps, 5);
@@ -177,6 +193,24 @@ void main() {
       await sub.cancel();
       await detector.dispose();
     });
+
+    test('ativo acompanha iniciar/parar e emite avisos', () async {
+      final detector = DetectorConsumoFake();
+      final avisos = <String>[];
+      final sub = detector.avisos.listen(avisos.add);
+
+      expect(detector.ativo, isFalse);
+      detector.iniciar();
+      expect(detector.ativo, isTrue);
+      detector.parar();
+      expect(detector.ativo, isFalse);
+
+      detector.emitirAviso('câmera falhou');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(avisos, ['câmera falhou']);
+      await sub.cancel();
+      await detector.dispose();
+    });
   });
 
   group('DetectorConsumoProcesso', () {
@@ -203,7 +237,10 @@ void main() {
       final confirmacoes = <void>[];
       final sub = detector.confirmacoes.listen(confirmacoes.add);
       detector.iniciar();
-      await _esperar(() => confirmacoes.isNotEmpty, porque: 'a confirmação da visão');
+      await _esperar(
+        () => confirmacoes.isNotEmpty,
+        porque: 'a confirmação da visão',
+      );
       expect(confirmacoes, hasLength(1));
       await sub.cancel();
       await detector.dispose();
@@ -238,51 +275,57 @@ void main() {
       gerador.parent.deleteSync(recursive: true);
     });
 
-    test('passa os argumentos do contrato (câmera e preview) ao script', () async {
-      final dir = Directory.systemTemp.createTempSync('visao');
-      final args = File('${dir.path}/args.txt');
-      final gerador = File('${dir.path}/gerador.sh')
-        ..writeAsStringSync(
-          '#!/bin/sh\n'
-          'printf "%s\\n" "\$@" > "${args.path}"\n'
-          'echo \'{"pill": 1, "no_pill": 0}\'\n'
-          'sleep 0.2\n',
-        );
-      Process.runSync('chmod', ['+x', gerador.path]);
+    test(
+      'passa os argumentos do contrato (câmera e preview) ao script',
+      () async {
+        final dir = Directory.systemTemp.createTempSync('visao');
+        final args = File('${dir.path}/args.txt');
+        final gerador = File('${dir.path}/gerador.sh')
+          ..writeAsStringSync(
+            '#!/bin/sh\n'
+            'printf "%s\\n" "\$@" > "${args.path}"\n'
+            'echo \'{"pill": 1, "no_pill": 0}\'\n'
+            'sleep 0.2\n',
+          );
+        Process.runSync('chmod', ['+x', gerador.path]);
 
-      final config = ConfiguracaoVisao(
-        ativo: true,
-        python: gerador.path,
-        script: 'ignorado',
-        modelo: 'best_ncnn_model',
-        camera: 1,
-        conf: 0.5,
-        frames: 30,
-        minPilulas: 1,
-        previewFps: 2,
-      );
-      final detector = DetectorConsumoProcesso(config);
-      detector.iniciar();
-      await _esperar(
-        () => args.existsSync() && args.readAsLinesSync().length >= 10,
-        porque: 'os argumentos do script',
-      );
-      final linhas = args.readAsStringSync().trim().split('\n');
-      expect(linhas, containsAllInOrder(<String>[
-        '--modelo',
-        'best_ncnn_model',
-        '--camera',
-        '1',
-        '--conf',
-        '0.5',
-        '--ndjson',
-        '--preview',
-        '--preview-fps',
-        '2.0',
-      ]));
-      await detector.dispose();
-      dir.deleteSync(recursive: true);
-    });
+        final config = ConfiguracaoVisao(
+          ativo: true,
+          python: gerador.path,
+          script: 'ignorado',
+          modelo: 'best_ncnn_model',
+          camera: 1,
+          conf: 0.5,
+          frames: 30,
+          minPilulas: 1,
+          previewFps: 2,
+        );
+        final detector = DetectorConsumoProcesso(config);
+        detector.iniciar();
+        await _esperar(
+          () => args.existsSync() && args.readAsLinesSync().length >= 10,
+          porque: 'os argumentos do script',
+        );
+        final linhas = args.readAsStringSync().trim().split('\n');
+        expect(
+          linhas,
+          containsAllInOrder(<String>[
+            '--modelo',
+            'best_ncnn_model',
+            '--camera',
+            '1',
+            '--conf',
+            '0.5',
+            '--ndjson',
+            '--preview',
+            '--preview-fps',
+            '2.0',
+          ]),
+        );
+        await detector.dispose();
+        dir.deleteSync(recursive: true);
+      },
+    );
 
     test('não confirma quando as leituras variam', () async {
       final gerador = _executavel(
@@ -308,6 +351,46 @@ void main() {
       detector.iniciar();
       await Future<void>.delayed(const Duration(milliseconds: 500));
       expect(confirmacoes, isEmpty);
+      await sub.cancel();
+      await detector.dispose();
+      gerador.parent.deleteSync(recursive: true);
+    });
+
+    test('expõe stderr e o encerramento do processo como avisos', () async {
+      final gerador = _executavel(
+        '#!/bin/sh\n'
+        'echo "erro de camera" >&2\n'
+        'echo "linha solta"\n'
+        'exit 1\n',
+      );
+      final config = ConfiguracaoVisao(
+        ativo: true,
+        python: gerador.path,
+        script: 'ignorado',
+        modelo: 'm',
+        camera: 0,
+        conf: 0.5,
+        frames: 3,
+        minPilulas: 1,
+      );
+      final detector = DetectorConsumoProcesso(config);
+      final avisos = <String>[];
+      final sub = detector.avisos.listen(avisos.add);
+      detector.iniciar();
+      expect(detector.ativo, isTrue);
+
+      await _esperar(
+        () => avisos.any((a) => a.contains('erro de camera')),
+        porque: 'o stderr da câmera',
+      );
+      await _esperar(
+        () => avisos.any((a) => a.contains('encerrou')),
+        porque: 'o aviso de encerramento',
+      );
+      expect(avisos.any((a) => a.contains('linha solta')), isFalse);
+
+      detector.parar();
+      expect(detector.ativo, isFalse);
       await sub.cancel();
       await detector.dispose();
       gerador.parent.deleteSync(recursive: true);

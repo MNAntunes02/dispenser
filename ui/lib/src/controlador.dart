@@ -5,11 +5,12 @@
 ///
 /// - `desconectado` -> tela "sem conexão" (a UI não inventa estado de dose);
 /// - ligado sem tela ainda -> "iniciando" (core conectado, retrato a caminho);
-/// - tela com `esperaBotao` -> fluxo da dose com o botão OK;
+/// - tela de dose -> fluxo guiado (sem botão OK no fluxo atual);
 /// - qualquer outra -> repouso.
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -27,7 +28,11 @@ sealed class EstadoUI {
 
 /// Core fora do ar: nada pode ser afirmado sobre a dose.
 class EstadoSemCore extends EstadoUI {
-  const EstadoSemCore({required this.momento, required this.rotulos, this.erro});
+  const EstadoSemCore({
+    required this.momento,
+    required this.rotulos,
+    this.erro,
+  });
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -39,10 +44,15 @@ class EstadoSemCore extends EstadoUI {
 
 /// Core conectado, aguardando o retrato inicial.
 class EstadoIniciando extends EstadoUI {
-  const EstadoIniciando({required this.momento, required this.rotulos});
+  const EstadoIniciando({
+    required this.momento,
+    required this.rotulos,
+    this.erro,
+  });
 
   final DateTime momento;
   final Rotulos rotulos;
+  final String? erro;
 
   @override
   DateTime get agora => momento;
@@ -80,6 +90,10 @@ class EstadoDose extends EstadoUI {
     required this.tela,
     required this.agenda,
     this.aviso,
+    this.visaoAtiva = false,
+    this.visaoEstavel = false,
+    this.visaoAviso,
+    this.visaoEspera = Duration.zero,
   });
 
   final DateTime momento;
@@ -87,6 +101,10 @@ class EstadoDose extends EstadoUI {
   final Tela tela;
   final Agenda agenda;
   final Aviso? aviso;
+  final bool visaoAtiva;
+  final bool visaoEstavel;
+  final String? visaoAviso;
+  final Duration visaoEspera;
 
   @override
   DateTime get agora => momento;
@@ -94,22 +112,33 @@ class EstadoDose extends EstadoUI {
 
 /// Converte os eventos do core no estado mostrado na tela.
 class ControladorUI extends ChangeNotifier {
-  ControladorUI(this.cliente, {DateTime Function()? relogio, DetectorConsumo? detector})
-      : _agora = relogio ?? DateTime.now,
-        _detector = detector ?? const DetectorConsumoNulo() {
+  ControladorUI(
+    this.cliente, {
+    DateTime Function()? relogio,
+    DetectorConsumo? detector,
+    this.limiteSemTela = const Duration(seconds: 10),
+    this.intervaloVigia = const Duration(seconds: 1),
+    this.maxTentativasSemTela = 2,
+  }) : _agora = relogio ?? DateTime.now,
+       _detector = detector ?? const DetectorConsumoNulo() {
     _rotulos = Rotulos.vazio;
     _agenda = Agenda.vazia;
     _eventos = cliente.eventos.listen(_tratarEvento);
-    _visao = _detector.confirmacoes.listen((_) => _confirmarPorVisao());
+    _visao = _detector.confirmacoes.listen((_) => _marcarVisaoEstavel());
     _quadrosVisao = _detector.quadros.listen(_tratarQuadro);
+    _avisosVisao = _detector.avisos.listen(_tratarAvisoVisao);
   }
 
   final ClienteCore cliente;
   final DateTime Function() _agora;
   final DetectorConsumo _detector;
+  final Duration limiteSemTela;
+  final Duration intervaloVigia;
+  final int maxTentativasSemTela;
   late final StreamSubscription<EventoCore> _eventos;
   late final StreamSubscription<void> _visao;
   late final StreamSubscription<Uint8List> _quadrosVisao;
+  late final StreamSubscription<String> _avisosVisao;
 
   Rotulos _rotulos = Rotulos.vazio;
   Agenda _agenda = Agenda.vazia;
@@ -119,14 +148,21 @@ class ControladorUI extends ChangeNotifier {
   Object? _erro;
   Timer? _relogio;
 
-  /// A detecção de visão está ligada agora (só durante o passo 4).
+  DateTime? _semTelaDesde;
+  int _tentativasSemTela = 0;
+  String? _erroSemTela;
+
+  /// A detecção de visão está ligada agora (só durante o passo 2).
   bool _visaoLigada = false;
 
-  /// A visão já confirmou esta dose (não repetir o `confirma`).
-  bool _visaoConfirmou = false;
+  /// A câmera já produziu uma leitura estável nesta tentativa.
+  bool _visaoEstavel = false;
 
-  /// Último quadro do preview da câmera (só no passo 4).
+  /// Último quadro do preview da câmera (só no passo 2).
   Uint8List? _quadro;
+
+  String? _visaoAviso;
+  DateTime? _visaoIniciadaEm;
 
   Rotulos get rotulos => _rotulos;
   Agenda get agenda => _agenda;
@@ -140,7 +176,11 @@ class ControladorUI extends ChangeNotifier {
     }
     final tela = _tela;
     if (tela == null) {
-      return EstadoIniciando(momento: agora, rotulos: _rotulos);
+      return EstadoIniciando(
+        momento: agora,
+        rotulos: _rotulos,
+        erro: _erroSemTela,
+      );
     }
     if (tela.doseEmAberto) {
       return EstadoDose(
@@ -149,6 +189,12 @@ class ControladorUI extends ChangeNotifier {
         tela: tela,
         agenda: _agenda,
         aviso: _aviso,
+        visaoAtiva: _detector.ativo,
+        visaoEstavel: _visaoEstavel,
+        visaoAviso: _visaoAviso,
+        visaoEspera: _visaoIniciadaEm == null
+            ? Duration.zero
+            : agora.difference(_visaoIniciadaEm!),
       );
     }
     return EstadoRepouso(
@@ -162,55 +208,101 @@ class ControladorUI extends ChangeNotifier {
   /// Última tela do core, se houver.
   Tela? get tela => _tela;
 
-  /// Botão OK visível? Só quando o core pediu (`ok` pendente).
+  /// Botão OK visível? O fluxo atual não usa OK (`esperaBotao` é sempre falso).
   bool get podeConfirmar => _tela?.esperaBotao ?? false;
 
-  /// Último frame do preview da câmera, se houver (passo 4).
+  /// Último frame do preview da câmera, se houver (passo 2).
   Uint8List? get quadro => _quadro;
 
+  /// Erro mostrado quando o core está conectado mas não manda tela.
+  String? get erroSemTela => _erroSemTela;
+
   void iniciar() {
-    _relogio = Timer.periodic(const Duration(seconds: 1), (_) => notifyListeners());
+    _relogio = Timer.periodic(intervaloVigia, (_) {
+      _verificarSemTela();
+      notifyListeners();
+    });
   }
 
-  /// O paciente apertou OK: só isso vai para o core. A UI não decide se a
-  /// dose foi tomada — o core confere os sensores e responde.
+  void _verificarSemTela() {
+    if (!_conectado || _tela != null) {
+      _semTelaDesde = null;
+      _tentativasSemTela = 0;
+      _erroSemTela = null;
+      return;
+    }
+    final agora = _agora();
+    _semTelaDesde ??= agora;
+    final esperando = agora.difference(_semTelaDesde!);
+    if (esperando < limiteSemTela) return;
+    if (_tentativasSemTela >= maxTentativasSemTela) {
+      _erroSemTela ??=
+          'Core conectado, mas sem o estado da dose. Reinicie o core.';
+      return;
+    }
+    _tentativasSemTela++;
+    _semTelaDesde = agora;
+    _erroSemTela = null;
+    final espera = esperando.inSeconds >= 1
+        ? '${esperando.inSeconds}s'
+        : '${esperando.inMilliseconds}ms';
+    stderr.writeln(
+      '[ui] conectado sem tela há $espera; '
+      'reconectando (tentativa $_tentativasSemTela/$maxTentativasSemTela)',
+    );
+    cliente.reconectar();
+  }
+
+  /// Envio legado do OK; o fluxo atual não exibe esse botão. A liberação do
+  /// consumo é feita pelo painel/CLI, não pela UI.
   void confirmar() => cliente.confirmar();
 
-  /// A detecção de visão liga só no passo 4 (consumo) e desliga ao sair. Sem
-  /// câmera o detector é nulo e nada muda: o botão OK segue valendo.
+  /// A detecção de visão liga só no passo 2 (consumo) e desliga ao sair.
+  /// Sem câmera o detector é nulo; a liberação manual continua no painel.
   void _ajustarVisao() {
-    final noConsumo = _conectado && _tela?.chave == 'tome_e_ok';
+    final noConsumo = _conectado && _tela?.chave == 'consuma_e_detectar';
     if (noConsumo) {
       if (!_visaoLigada) {
         _visaoLigada = true;
-        _visaoConfirmou = false;
+        _visaoEstavel = false;
         _quadro = null;
+        _visaoAviso = null;
+        _visaoIniciadaEm = _agora();
         _detector.iniciar();
       }
     } else if (_visaoLigada) {
       _visaoLigada = false;
+      _visaoEstavel = false;
       _quadro = null;
+      _visaoAviso = null;
+      _visaoIniciadaEm = null;
       _detector.parar();
     }
   }
 
-  /// Guarda o frame do preview e redesenha a tela. Fora do passo 4 o quadro é
-  /// descartado: a câmera só existe durante o consumo.
+  void _tratarAvisoVisao(String aviso) {
+    if (!_visaoLigada) return;
+    _visaoAviso = aviso;
+    notifyListeners();
+  }
+
+  /// Guarda o frame do preview e redesenha a tela. Fora do passo 2 o quadro é
+  /// descartado: a câmera só existe durante a detecção.
   void _tratarQuadro(Uint8List quadro) {
-    if (!_conectado || _tela?.chave != 'tome_e_ok') return;
+    if (!_conectado || _tela?.chave != 'consuma_e_detectar') return;
     _quadro = quadro;
     notifyListeners();
   }
 
-  /// A câmera reconheceu o consumo: manda o mesmo `confirma` do botão OK.
+  /// A câmera produziu uma leitura estável: só atualiza o status.
   ///
-  /// Guardas: só no passo 4, uma vez por dose e nunca no lugar do core — quem
-  /// valida a dose continua sendo ele (ADR 009).
-  void _confirmarPorVisao() {
-    if (_visaoConfirmou) return;
-    if (!_conectado || _tela?.chave != 'tome_e_ok') return;
-    _visaoConfirmou = true;
-    confirmar();
+  /// A UI não confirma a dose (ADR 009/017); o operador libera o próximo passo
+  /// pelo painel/CLI, e o core registra a liberação.
+  void _marcarVisaoEstavel() {
+    if (_visaoEstavel) return;
+    if (!_conectado || _tela?.chave != 'consuma_e_detectar') return;
+    _visaoEstavel = true;
+    notifyListeners();
   }
 
   void _tratarEvento(EventoCore evento) {
@@ -218,6 +310,9 @@ class ControladorUI extends ChangeNotifier {
       case ConexaoMudou(:final conectado, :final erro):
         _conectado = conectado;
         _erro = erro;
+        _semTelaDesde = null;
+        _tentativasSemTela = 0;
+        _erroSemTela = null;
         if (!conectado) {
           // Sem core não há estado confiável: limpa a tela para não exibir
           // um passo antigo como se fosse verdade atual.
@@ -242,6 +337,9 @@ class ControladorUI extends ChangeNotifier {
         _agenda = mensagem;
       case Tela():
         _tela = mensagem;
+        _semTelaDesde = null;
+        _tentativasSemTela = 0;
+        _erroSemTela = null;
         // A tela do fluxo também é a última linha do aviso: se o core mostra
         // uma falha, o aviso some junto (evita alerta fantasma).
         if (mensagem.fluxo == 'alerta') {
@@ -263,6 +361,7 @@ class ControladorUI extends ChangeNotifier {
     unawaited(_eventos.cancel());
     unawaited(_visao.cancel());
     unawaited(_quadrosVisao.cancel());
+    unawaited(_avisosVisao.cancel());
     unawaited(_detector.dispose());
     super.dispose();
   }

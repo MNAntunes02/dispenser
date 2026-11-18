@@ -6,6 +6,7 @@ from core.agendador import abrev_dia_semana
 from core.armazenamento import Database
 from core.config import Config
 from core.coordenador import AgendaMemo, Coordenador, PublicadorLog
+from core.protocolo_ui import comando_liberar_proximo
 from hardware.bridge.bridge_simulada import PonteSimulada
 
 DIA = datetime(2026, 9, 19, 8, 0, 0)  # sábado
@@ -62,15 +63,18 @@ def _chaves(pub):
 
 
 def _concluir(coord, ponte, pub):
-    passos = (
-        {"e": "botao"},
+    for evento in (
         {"e": "gaveta_aberta"},
         {"e": "slot_ausente", "slot": 0},
-        {"e": "botao"},
+    ):
+        ponte.simular(evento)
+        coord.tick()
+    coord.entrada_ui(comando_liberar_proximo())
+    coord.tick()
+    for evento in (
         {"e": "slot_presente", "slot": 0},
         {"e": "gaveta_fechada"},
-    )
-    for evento in passos:
+    ):
         ponte.simular(evento)
         coord.tick()
     return _chaves(pub)
@@ -88,7 +92,7 @@ def test_fluxo_feliz_completo_no_simulador(tmp_path):
     relogio.avancar(seconds=1)
     coord.tick()
     chaves = _chaves(pub)
-    assert "hora_remedio" in chaves
+    assert "abra_gaveta" in chaves
     assert db.ocorrencia_ativa() is not None
 
     _concluir(coord, ponte, pub)
@@ -102,32 +106,35 @@ def test_fluxo_feliz_completo_no_simulador(tmp_path):
     assert [p["tipo"] for p in pendentes] == ["dose_tomada", "dose_concluida"]
 
     coord.tick()  # dose concluída não reabre
-    assert _chaves(pub).count("hora_remedio") == 1
+    assert _chaves(pub).count("abra_gaveta") == 1
 
 
-def test_dose_tomada_so_possivel_apos_sensor_e_ok(tmp_path):
+def test_dose_tomada_so_possivel_apos_liberacao(tmp_path):
     coord, db, pub, ponte, relogio = _montar(tmp_path, _meds(["08:00"]), inicio=DIA)
     coord.tick()
     assert db.outbox_pendentes() == []
 
-    ponte.simular({"e": "botao"})  # OK sem alarme prévio? já está em ALARME
+    # Botão físico não avança o fluxo novo.
+    ponte.simular({"e": "botao"})
     coord.tick()
     assert "abra_gaveta" in _chaves(pub)
-
-    ponte.simular({"e": "botao"})  # OK duplo, sem retirada
-    coord.tick()
-    assert db.outbox_pendentes() == []  # não registrou tomada
+    assert db.outbox_pendentes() == []
 
     ponte.simular({"e": "gaveta_aberta"})
     coord.tick()
-    ponte.simular({"e": "botao"})  # OK sem tirar o remédio
+    assert "consuma_e_detectar" in _chaves(pub)
+    ponte.simular({"e": "botao"})
     coord.tick()
-    assert [p["tipo"] for p in db.outbox_pendentes()] == []  # tomada exige slot_ausente
+    assert db.outbox_pendentes() == []
 
     ponte.simular({"e": "slot_ausente", "slot": 0})
     coord.tick()
-    assert "tome_e_ok" in _chaves(pub)
-    ponte.simular({"e": "botao"})
+    assert _chaves(pub)[-1] == "consuma_e_detectar"
+    assert db.ocorrencia_ativa()["slot_retorno"] == 0
+    assert db.outbox_pendentes() == []
+
+    # A liberação explícita do operador registra a tomada.
+    assert coord.entrada_ui(comando_liberar_proximo()) is True
     coord.tick()
     assert [p["tipo"] for p in db.outbox_pendentes()] == ["dose_tomada"]
 
@@ -164,13 +171,11 @@ def test_retomada_apos_reinicio_no_meio_da_dose(tmp_path):
     coord, db, pub, ponte, relogio = _montar(tmp_path, _meds(["08:00"]), inicio=DIA)
     coord.tick()
 
-    ponte.simular({"e": "botao"})
-    coord.tick()
     ponte.simular({"e": "gaveta_aberta"})
     coord.tick()
     ponte.simular({"e": "slot_ausente", "slot": 0})
     coord.tick()
-    assert db.ocorrencia_ativa()["estado"] == "MEDICAMENTO_RETIRADO"
+    assert db.ocorrencia_ativa()["estado"] == "AGUARDANDO_DETECCAO"
     assert db.outbox_pendentes() == []
 
     # "queda de energia": novo processo sobre o mesmo banco e relógio
@@ -181,11 +186,14 @@ def test_retomada_apos_reinicio_no_meio_da_dose(tmp_path):
         inicio=DIA,
         relogio=relogio,
     )
+    # O processo novo não tem tela em memória: a retomada precisa republicar o
+    # passo salvo antes de qualquer evento, senão a UI fica em "conectando".
+    assert _chaves(pub2) == ["consuma_e_detectar"]
     coord2.tick()
-    assert db2.ocorrencia_ativa()["estado"] == "MEDICAMENTO_RETIRADO"
+    assert db2.ocorrencia_ativa()["estado"] == "AGUARDANDO_DETECCAO"
     assert db2.outbox_pendentes() == []  # sem duplicar eventos
 
-    ponte2.simular({"e": "botao"})
+    coord2.entrada_ui(comando_liberar_proximo())
     coord2.tick()
     assert [p["tipo"] for p in db2.outbox_pendentes()] == ["dose_tomada"]
     ponte2.simular({"e": "slot_presente", "slot": 0})
@@ -280,6 +288,8 @@ def test_medicamento_nao_devolvido_avisa_ate_limite(tmp_path):
 
 
 def _concluir_ate_tomada(coord, ponte, pub):
-    for evento in ({"e": "botao"}, {"e": "gaveta_aberta"}, {"e": "slot_ausente", "slot": 0}, {"e": "botao"}):
+    for evento in ({"e": "gaveta_aberta"}, {"e": "slot_ausente", "slot": 0}):
         ponte.simular(evento)
         coord.tick()
+    coord.entrada_ui(comando_liberar_proximo())
+    coord.tick()

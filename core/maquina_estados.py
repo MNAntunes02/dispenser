@@ -1,14 +1,14 @@
 """Máquina de estados da dose (núcleo puro e testável, sem serial/tela).
 
 Implementa a transição completa de docs/spec/03-fluxo-dose.md:
-AGUARDANDO -> ALARME -> AGUARDANDO_GAVETA -> GAVETA_ABERTA ->
-MEDICAMENTO_RETIRADO -> AGUARDANDO_RETORNO -> CONCLUIDA, com
-NAO_ATENDIDA, RETORNO_PENDENTE e FALHA como desvios.
+AGUARDANDO -> ALARME -> AGUARDANDO_DETECCAO -> AGUARDANDO_RETORNO ->
+CONCLUIDA, com NAO_ATENDIDA, RETORNO_PENDENTE e FALHA como desvios.
 
 Regras de projeto (AGENTS.md):
 - Máquina pura: entrada = eventos, saída = ações (sem hardware/rede).
-- Nunca marcar dose como tomada sem confirmação do usuário (evento `ok`)
-  e o sensor correspondente (slot_ausente) já terem ocorrido no fluxo.
+- Nunca marcar dose como tomada sem a liberação explícita do operador
+  (evento `liberar_proximo`) no passo de detecção. O `slot_ausente` é usado
+  para identificar o slot de devolução, não como confirmação da tomada.
 - Falha/estado incoerente vai a FALHA e a dose NÃO é considerada tomada.
 - Idempotência: estado terminal (CONCLUIDA/NAO_ATENDIDA) não reabre.
 """
@@ -24,9 +24,7 @@ from core.config import Config
 class Fase(str, Enum):
     AGUARDANDO = "AGUARDANDO"
     ALARME = "ALARME"
-    AGUARDANDO_GAVETA = "AGUARDANDO_GAVETA"
-    GAVETA_ABERTA = "GAVETA_ABERTA"
-    MEDICAMENTO_RETIRADO = "MEDICAMENTO_RETIRADO"
+    AGUARDANDO_DETECCAO = "AGUARDANDO_DETECCAO"
     AGUARDANDO_RETORNO = "AGUARDANDO_RETORNO"
     RETORNO_PENDENTE = "RETORNO_PENDENTE"
     CONCLUIDA = "CONCLUIDA"
@@ -39,6 +37,7 @@ class Contexto:
     nome: str = ""
     dosagem: str = ""
     slot: int | None = None
+    slot_retorno: int | None = None
     proxima_dose: str = ""
     tentativas: int = 0
 
@@ -60,10 +59,7 @@ def _alarme_tentativa(ctx: Contexto, config: Config, tent: int) -> tuple[Fase, l
         ]
     return Fase.ALARME, [
         Acao("buzzer", {"padrao": "dose"}),
-        Acao(
-            "tela",
-            {"chave": "hora_remedio", "nome": ctx.nome, "dosagem": ctx.dosagem},
-        ),
+        Acao("tela", {"chave": "abra_gaveta"}),
     ]
 
 
@@ -97,10 +93,7 @@ def processar(
             return Fase.ALARME, [
                 Acao("buzzer", {"padrao": "dose"}),
                 Acao("led", {"slot": ctx.slot, "estado": "on"}),
-                Acao(
-                    "tela",
-                    {"chave": "hora_remedio", "nome": ctx.nome, "dosagem": ctx.dosagem},
-                ),
+                Acao("tela", {"chave": "abra_gaveta"}),
             ], tent
         if evento == "gaveta_aberta":
             return Fase.AGUARDANDO, [
@@ -111,53 +104,41 @@ def processar(
         return fase, [], tent
 
     if fase == Fase.ALARME:
-        if evento == "ok":
-            return Fase.AGUARDANDO_GAVETA, [
+        if evento == "gaveta_aberta":
+            return Fase.AGUARDANDO_DETECCAO, [
                 Acao("parar_buzzer"),
-                Acao("tela", {"chave": "abra_gaveta"}),
+                Acao("tela", {"chave": "consuma_e_detectar"}),
             ], tent
         if evento == "timeout_alarme":
             nova_fase, acoes = _alarme_tentativa(ctx, config, tent)
             return nova_fase, acoes, tent + 1
         return fase, [], tent
 
-    if fase == Fase.AGUARDANDO_GAVETA:
-        if evento == "gaveta_aberta":
-            return Fase.GAVETA_ABERTA, [
-                Acao("tela", {"chave": "retire_medicamento", "slot": ctx.slot}),
-            ], tent
-        if evento == "timeout_gaveta":
-            nova_fase, acoes = _alarme_tentativa(ctx, config, tent)
-            return nova_fase, acoes, tent + 1
-        return fase, [], tent
-
-    if fase == Fase.GAVETA_ABERTA:
-        if evento == "slot_ausente":
-            return Fase.MEDICAMENTO_RETIRADO, [
-                Acao("tela", {"chave": "tome_e_ok"}),
-            ], tent
-        return fase, [], tent
-
-    if fase == Fase.MEDICAMENTO_RETIRADO:
-        if evento == "ok":
+    if fase == Fase.AGUARDANDO_DETECCAO:
+        if evento == "liberar_proximo":
+            slot = ctx.slot_retorno if ctx.slot_retorno is not None else ctx.slot
             return Fase.AGUARDANDO_RETORNO, [
                 Acao("registrar", {"tipo": "dose_tomada"}),
-                Acao("tela", {"chave": "devolva_slot", "slot": ctx.slot}),
+                Acao("led", {"slot": slot, "estado": "on"}),
+                Acao("tela", {"chave": "devolva_slot", "slot": slot}),
             ], tent
+        # `slot_ausente` só identifica o slot de devolução; o coordenador
+        # persiste o valor e a dose continua aguardando a liberação manual.
         return fase, [], tent
 
     if fase in (Fase.AGUARDANDO_RETORNO, Fase.RETORNO_PENDENTE):
+        slot = ctx.slot_retorno if ctx.slot_retorno is not None else ctx.slot
         if evento == "retorno_ok":
             return Fase.CONCLUIDA, [
                 Acao("registrar", {"tipo": "dose_concluida"}),
                 Acao("tela", {"chave": "tudo_certo", "proxima": ctx.proxima_dose}),
-                Acao("apagar_led", {"slot": ctx.slot}),
+                Acao("apagar_led", {"slot": slot}),
             ], tent
         if fase == Fase.AGUARDANDO_RETORNO and evento == "timeout_retorno":
             return Fase.RETORNO_PENDENTE, [
                 Acao("buzzer", {"padrao": "retorno"}),
-                Acao("led", {"slot": ctx.slot, "estado": "on"}),
-                Acao("tela", {"chave": "aviso_retorno", "slot": ctx.slot}),
+                Acao("led", {"slot": slot, "estado": "on"}),
+                Acao("tela", {"chave": "aviso_retorno", "slot": slot}),
             ], tent
         if fase == Fase.RETORNO_PENDENTE and evento == "limite_retorno_excedido":
             return Fase.RETORNO_PENDENTE, [

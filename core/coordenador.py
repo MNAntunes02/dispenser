@@ -69,20 +69,15 @@ def _relogio_padrao() -> datetime:
 
 _FASES_ATIVAS = {
     Fase.ALARME.value,
-    Fase.AGUARDANDO_GAVETA.value,
-    Fase.GAVETA_ABERTA.value,
-    Fase.MEDICAMENTO_RETIRADO.value,
+    Fase.AGUARDANDO_DETECCAO.value,
     Fase.AGUARDANDO_RETORNO.value,
     Fase.RETORNO_PENDENTE.value,
     Fase.FALHA.value,
 }
 
-#: Fases em que a dose só avança com um "OK" (botão físico ou tecla na UI).
-_FASES_ESPERAM_BOTAO = {Fase.ALARME.value, Fase.MEDICAMENTO_RETIRADO.value}
-
-#: `botao` só confirma a dose quando o id da placa for este. Abridão: evento
-#: sem id (simulador antigo) também confirma.
-_BOTAO_CONFIRMA = "confirma"
+#: O fluxo não tem mais confirmação pelo paciente: a dose avança no passo de
+#: detecção por comando explícito do operador (`liberar_proximo`).
+_FASES_ESPERAM_BOTAO: set[str] = set()
 
 #: Telas de repouso: fora do fluxo da dose e sem `passo` (spec 05).
 _CHAVES_REPOSO = ("reposo", "reposo_sem_dose")
@@ -95,10 +90,8 @@ _CHAVES_ALERTA = ("relogio_nao_confiavel", "relogio_instavel")
 #: relógio deixou de ser confiável (a decisão continua na máquina de estados;
 #: aqui é apresentação, para o paciente não ficar olhando o aviso de relógio).
 _CHAVE_POR_FASE = {
-    Fase.ALARME.value: "hora_remedio",
-    Fase.AGUARDANDO_GAVETA.value: "abra_gaveta",
-    Fase.GAVETA_ABERTA.value: "retire_medicamento",
-    Fase.MEDICAMENTO_RETIRADO.value: "tome_e_ok",
+    Fase.ALARME.value: "abra_gaveta",
+    Fase.AGUARDANDO_DETECCAO.value: "consuma_e_detectar",
     Fase.AGUARDANDO_RETORNO.value: "devolva_slot",
     Fase.RETORNO_PENDENTE.value: "aviso_retorno",
     Fase.FALHA.value: "falha",
@@ -275,9 +268,14 @@ class Coordenador:
                     self._db.registrar_log("tela_nao_republicada:FALHA")
             self._ultima_tela = None
             return
+        slot = (
+            ativa["slot_retorno"]
+            if ativa["slot_retorno"] is not None
+            else ativa["slot"]
+        )
         dados: dict = {
             "chave": chave,
-            "slot": ativa["slot"],
+            "slot": slot,
             "nome": ativa["medicamento_nome"],
             "dosagem": ativa["dosagem"],
             "proxima": self._proxima_dose(excepto=ativa["id"]),
@@ -371,8 +369,28 @@ class Coordenador:
         cmd = str(msg.get("cmd") or "")
         if cmd == "simular":
             return self._comando_simular(msg.get("args"))
+        if cmd == "liberar_proximo":
+            return self._comando_liberar_proximo()
         self._db.registrar_log(f"ui_comando_ignorado:{cmd or 'vazio'}")
         return False
+
+    def _comando_liberar_proximo(self) -> bool:
+        """Libera o passo de detecção após o operador confirmar o consumo.
+
+        A câmera é apoio visual: o core não recebe leitura de imagem e aceita
+        a liberação sempre que a dose estiver em `AGUARDANDO_DETECCAO`. O
+        comando fica na trilha para auditoria.
+        """
+        with self._trava:
+            ativa = self._ativa
+            if ativa is None:
+                self._db.registrar_log("liberar_proximo_sem_dose")
+                return False
+            if ativa["estado"] != Fase.AGUARDANDO_DETECCAO.value:
+                self._db.registrar_log("liberar_proximo_sem_deteccao")
+                return False
+            self._emitir_para(ativa, "liberar_proximo")
+            return True
 
     def _comando_simular(self, args: object) -> bool:
         """Injeta um evento de sensor na ponte (painel de desenvolvimento).
@@ -412,11 +430,10 @@ class Coordenador:
                 # Política aprovada: sem soneca. Qualquer outra ação é ignorada.
                 self._db.registrar_log(f"ui_acao_ignorada:{acao}")
                 return False
-            if self._ativa is None:
-                self._db.registrar_log("ui_confirma_sem_dose")
-                return False
-            self._emitir_para(self._ativa, "ok")
-            return True
+            # O fluxo atual não confirma a dose por OK: o avanço do passo de
+            # detecção é explícito no painel/CLI (`liberar_proximo`).
+            self._db.registrar_log("ui_confirma_sem_efeito")
+            return False
 
     def _publicar_reposo_se_precisa(self) -> None:
         """Mantém a tela de repouso na UI quando não há dose em andamento.
@@ -500,6 +517,12 @@ class Coordenador:
         self._ativa = self._db.ocorrencia_ativa()
         if self._ativa is not None:
             self._avaliar_retorno()
+            # Retomada após reinício: a tela não existe em processo novo, e sem
+            # republicá-la a UI ficaria em "conectando" até um evento mudar a
+            # fase (numa fase que espera o botão, esse evento nunca chega).
+            # Só repinta se `_avaliar_retorno` não concluiu a dose.
+            if self._ativa is not None:
+                self._republicar_tela()
 
     def _escolher_proxima(self) -> None:
         if self._ativa is not None:
@@ -528,8 +551,6 @@ class Coordenador:
         estado = ativa["estado"]
         if estado == Fase.ALARME.value and decorrido >= cfg.intervalo_alarme_s:
             self._emitir_para(ativa, "timeout_alarme")
-        elif estado == Fase.AGUARDANDO_GAVETA.value and decorrido >= cfg.timeout_gaveta_s:
-            self._emitir_para(ativa, "timeout_gaveta")
         elif estado == Fase.AGUARDANDO_RETORNO.value and decorrido >= cfg.timeout_retorno_s:
             self._emitir_para(ativa, "timeout_retorno")
         elif estado == Fase.RETORNO_PENDENTE.value:
@@ -574,21 +595,36 @@ class Coordenador:
         elif tipo == "slot_ausente":
             slot = int(evento.get("slot", -1))
             self._slots[slot] = False
+            self._registrar_slot_retorno(slot)
             self._emite("slot_ausente", {"slot": slot})
         elif tipo == "botao":
-            # Só o botão "confirma" avança a dose: avanca/volta/ajuda da placa
-            # existem para a navegação da tela e não confirmam a tomada.
-            botao = evento.get("id")
-            if botao in (None, _BOTAO_CONFIRMA):
-                self._emite("ok")
-            else:
-                self._db.registrar_log(f"botao_sem_efeito:{botao}")
+            # O fluxo atual não avança por botão: a liberação do consumo é
+            # explícita no painel/CLI, nunca por um toque acidental.
+            botao = str(evento.get("id") or "confirma")
+            self._db.registrar_log(f"botao_sem_efeito:{botao}")
         elif tipo == "falha":
             codigo = str(evento.get("codigo") or "F000")
             self._ultimo_codigo = codigo
             self._emite("falha", {"codigo": codigo})
         else:
             self._db.registrar_log(f"evento_ignorado:{tipo}")
+
+    def _registrar_slot_retorno(self, slot: int) -> None:
+        """Guarda o primeiro slot que ficou vazio durante a detecção.
+
+        O slot de devolução vem do sensor (`slot_ausente`), não do slot
+        agendado: a cartela pode ter sido guardada em outro lugar.
+        """
+        ativa = self._ativa
+        if ativa is None or slot < 0:
+            return
+        if ativa["estado"] != Fase.AGUARDANDO_DETECCAO.value:
+            return
+        if ativa["slot_retorno"] is not None:
+            return
+        self._db.atualizar_ocorrencia(ativa["id"], slot_retorno=slot)
+        self._ativa = self._db.obter_ocorrencia(ativa["id"])
+        self._db.registrar_log(f"slot_retorno:{slot}", ativa["id"])
 
     def _retorno_ok(self, ativa: dict | None) -> bool:
         if ativa is None:
@@ -597,7 +633,11 @@ class Coordenador:
             return False
         if self._gaveta:  # gaveta precisa estar fechada
             return False
-        slot = ativa["slot"]
+        slot = (
+            ativa["slot_retorno"]
+            if ativa["slot_retorno"] is not None
+            else ativa["slot"]
+        )
         if slot is not None:
             return self._slots.get(slot, False)
         return any(self._slots.values())
@@ -647,6 +687,7 @@ class Coordenador:
             nome=occ["medicamento_nome"],
             dosagem=occ["dosagem"],
             slot=occ["slot"],
+            slot_retorno=occ["slot_retorno"],
             tentativas=int(occ["tentativas"]),
             proxima_dose=self._proxima_dose(excepto=occ_id),
         )
@@ -698,7 +739,7 @@ class Coordenador:
         """
         chave = dados.get("chave")
         variante = ""
-        if chave in ("retire_medicamento", "devolva_slot", "aviso_retorno") and dados.get("slot") is None:
+        if chave in ("devolva_slot", "aviso_retorno") and dados.get("slot") is None:
             variante = "_sem_slot"
         elif chave == "tudo_certo" and not dados.get("proxima"):
             variante = "_fim"

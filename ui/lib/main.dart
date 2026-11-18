@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import 'src/ambiente.dart';
 import 'src/canal.dart';
 import 'src/cliente_core.dart';
 import 'src/controlador.dart';
@@ -19,15 +20,18 @@ import 'src/visao.dart';
 /// Caminho do socket, definido na compilação (`--dart-define`).
 ///
 /// Existe para o dev (`flutter test`) apontar para um core em outra máquina.
-const String kSocketCompilado = String.fromEnvironment('DISPENSER_SOCKET', defaultValue: kSocketPadrao);
+const String kSocketCompilado = String.fromEnvironment(
+  'DISPENSER_SOCKET',
+  defaultValue: kSocketPadrao,
+);
 
 /// Caminho efetivo do socket: o ambiente na hora da execução vence.
 ///
 /// A unit systemd passa `DISPENSER_SOCKET`; sem esta leitura o instalador
 /// precisaria recompilar a UI sempre que mudasse o caminho — e um caminho
 /// errado faria a tela ficar eternamente em "conectando", sem erro visível.
-String caminhoSocketDoCore() {
-  final doAmbiente = Platform.environment['DISPENSER_SOCKET'];
+String caminhoSocketDoCore([Map<String, String>? ambiente]) {
+  final doAmbiente = (ambiente ?? Platform.environment)['DISPENSER_SOCKET'];
   if (doAmbiente != null && doAmbiente.trim().isNotEmpty) {
     return doAmbiente.trim();
   }
@@ -35,11 +39,12 @@ String caminhoSocketDoCore() {
 }
 
 void main() {
-  final caminho = caminhoSocketDoCore();
+  final ambiente = carregarAmbiente(base: Platform.environment);
+  final caminho = caminhoSocketDoCore(ambiente);
   final canal = CanalSocketUnix(caminho);
   final cliente = ClienteCore(canal, caminho: caminho);
-  // Detecção de consumo (passo 4): liga só se `DISPENSER_VISAO_SCRIPT` existir.
-  final detector = detectorDoAmbiente(Platform.environment);
+  // Detecção de consumo (passo 2): liga só se `DISPENSER_VISAO_SCRIPT` existir.
+  final detector = detectorDoAmbiente(ambiente);
   final controlador = ControladorUI(cliente, detector: detector);
   cliente.iniciar();
   controlador.iniciar();

@@ -21,12 +21,17 @@ from core.agendador import Ocorrencia
 
 _ESTADOS_ATIVOS = (
     "ALARME",
-    "AGUARDANDO_GAVETA",
-    "GAVETA_ABERTA",
-    "MEDICAMENTO_RETIRADO",
+    "AGUARDANDO_DETECCAO",
     "AGUARDANDO_RETORNO",
     "RETORNO_PENDENTE",
     "FALHA",
+)
+
+#: Fases antigas (fluxo com OK) migradas ao abrir um banco existente.
+_MIGRACAO_FASES = (
+    ("AGUARDANDO_GAVETA", "ALARME"),
+    ("GAVETA_ABERTA", "AGUARDANDO_DETECCAO"),
+    ("MEDICAMENTO_RETIRADO", "AGUARDANDO_DETECCAO"),
 )
 
 #: Retenção padrão da trilha local (`log_eventos`).
@@ -56,6 +61,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._ajustar_para_cartao_sd()
         self.criar_schema()
+        self._migrar_schema()
 
     def _ajustar_para_cartao_sd(self) -> None:
         """PRAGMAs que importam no cartão SD (spec 04, ADR 013).
@@ -102,6 +108,7 @@ class Database:
                 medicamento_nome TEXT NOT NULL DEFAULT '',
                 dosagem TEXT NOT NULL DEFAULT '',
                 slot INTEGER,
+                slot_retorno INTEGER,
                 dia TEXT NOT NULL,
                 horario TEXT NOT NULL,
                 estado TEXT NOT NULL,
@@ -133,6 +140,29 @@ class Database:
             );
             """
         )
+
+    def _migrar_schema(self) -> None:
+        """Atualiza bancos criados por versões anteriores do fluxo.
+
+        `CREATE TABLE IF NOT EXISTS` não adiciona colunas em tabelas já
+        existentes; a migração roda a cada conexão e é idempotente.
+        """
+        colunas = {
+            linha["name"]
+            for linha in self.conexao.execute("PRAGMA table_info(ocorrencias)")
+        }
+        if "slot_retorno" not in colunas:
+            self.conexao.execute(
+                "ALTER TABLE ocorrencias ADD COLUMN slot_retorno INTEGER"
+            )
+        agora = self._agora()
+        for antiga, nova in _MIGRACAO_FASES:
+            self.conexao.execute(
+                "UPDATE ocorrencias SET estado = ?, atualizado_em = ? "
+                "WHERE estado = ?",
+                (nova, agora, antiga),
+            )
+        self.conexao.commit()
 
     # --- ocorrências -------------------------------------------------------
 
@@ -228,6 +258,7 @@ class Database:
         estado: str | None = None,
         tentativas: int | None = None,
         notificado: int | None = None,
+        slot_retorno: int | None = None,
     ) -> None:
         campos: list[str] = ["atualizado_em = ?"]
         valores: list[object] = [self._agora()]
@@ -240,6 +271,9 @@ class Database:
         if notificado is not None:
             campos.append("notificado = ?")
             valores.append(notificado)
+        if slot_retorno is not None:
+            campos.append("slot_retorno = ?")
+            valores.append(slot_retorno)
         valores.append(ocorrencia_id)
         self.conexao.execute(
             f"UPDATE ocorrencias SET {', '.join(campos)} WHERE id = ?", valores

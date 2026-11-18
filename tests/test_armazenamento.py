@@ -1,5 +1,6 @@
 """Testes do armazenamento: schema, ocorrências, outbox e trilha."""
 
+import sqlite3
 from datetime import datetime
 
 from core.agendador import Ocorrencia
@@ -41,10 +42,16 @@ def test_inserir_ocorrencia_se_nova_inicia_aguardando(db):
 
 def test_atualizar_ocorrencia_mantem_campos(db):
     db.inserir_ocorrencia_se_nova(_occ())
-    db.atualizar_ocorrencia("med1|2026-09-19|08:00", estado="ALARME", tentativas=2)
+    db.atualizar_ocorrencia(
+        "med1|2026-09-19|08:00",
+        estado="AGUARDANDO_DETECCAO",
+        tentativas=2,
+        slot_retorno=3,
+    )
     ocorr = db.obter_ocorrencia("med1|2026-09-19|08:00")
-    assert ocorr["estado"] == "ALARME"
+    assert ocorr["estado"] == "AGUARDANDO_DETECCAO"
     assert ocorr["tentativas"] == 2
+    assert ocorr["slot_retorno"] == 3
     assert ocorr["atualizado_em"] is not None
 
 
@@ -53,9 +60,55 @@ def test_ocorrencia_ativa_filtra_estados(db):
     terminada = _occ(horario="20:00")
     db.inserir_ocorrencia_se_nova(ativa)
     db.inserir_ocorrencia_se_nova(terminada)
-    db.atualizar_ocorrencia(ativa.id, estado="MEDICAMENTO_RETIRADO")
+    db.atualizar_ocorrencia(ativa.id, estado="AGUARDANDO_DETECCAO")
     db.atualizar_ocorrencia(terminada.id, estado="CONCLUIDA")
     assert db.ocorrencia_ativa()["id"] == ativa.id
+
+
+def test_migra_fases_antigas_e_adiciona_slot_retorno(tmp_path):
+    caminho = tmp_path / "antigo.db"
+    conn = sqlite3.connect(caminho)
+    conn.executescript(
+        """
+        CREATE TABLE ocorrencias (
+            id TEXT PRIMARY KEY,
+            medicamento TEXT NOT NULL,
+            medicamento_nome TEXT NOT NULL DEFAULT '',
+            dosagem TEXT NOT NULL DEFAULT '',
+            slot INTEGER,
+            dia TEXT NOT NULL,
+            horario TEXT NOT NULL,
+            estado TEXT NOT NULL,
+            tentativas INTEGER NOT NULL DEFAULT 0,
+            notificado INTEGER NOT NULL DEFAULT 0,
+            atualizado_em TEXT
+        );
+        INSERT INTO ocorrencias
+            (id, medicamento, dia, horario, estado)
+        VALUES
+            ('med1|2026-09-19|08:00', 'med1', '2026-09-19', '08:00',
+             'AGUARDANDO_GAVETA'),
+            ('med1|2026-09-19|20:00', 'med1', '2026-09-19', '20:00',
+             'MEDICAMENTO_RETIRADO');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    migrado = Database(caminho)
+    migrado.conectar()
+    try:
+        assert migrado.obter_ocorrencia("med1|2026-09-19|08:00")["estado"] == "ALARME"
+        assert (
+            migrado.obter_ocorrencia("med1|2026-09-19|20:00")["estado"]
+            == "AGUARDANDO_DETECCAO"
+        )
+        assert (
+            migrado.obter_ocorrencia("med1|2026-09-19|08:00")["slot_retorno"]
+            is None
+        )
+    finally:
+        migrado.fechar()
 
 
 def test_proxima_aguardando_ordenada_e_filtra_dia(db):

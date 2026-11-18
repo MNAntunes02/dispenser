@@ -1,14 +1,19 @@
 import argparse
 import base64
+import os
+import signal
+import socket
 import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 import torch
 from libcamera import controls
 from picamera2 import Picamera2
 from ultralytics import YOLO
 
+from desempenho import EstatisticasInferencia
 from visao import contar_classes, linha_ndjson
 
 CORES = {
@@ -16,6 +21,8 @@ CORES = {
     "no_pill": (0, 0, 255),
 }
 COR_PADRAO = (255, 200, 0)
+
+TUNING_NOIR = Path("/usr/share/libcamera/ipa/rpi/vc4/imx219_noir.json")
 
 MODOS_AWB = {
     "auto": controls.AwbModeEnum.Auto,
@@ -37,6 +44,16 @@ def modo_awb(nome):
         raise RuntimeError(f"Modo AWB invalido: {nome}") from None
 
 
+def tuning_padrao():
+    """Tuning NoIR do libcamera, quando disponivel (camera sem filtro IR).
+
+    Sem o filtro IR o tuning padrao zera o canal verde e o preview fica
+    magenta; o arquivo `*_noir.json` corrige a resposta de cor. Se o arquivo
+    nao existir (outro hardware), devolve "" para usar o padrao do sistema.
+    """
+    return str(TUNING_NOIR) if TUNING_NOIR.exists() else ""
+
+
 def ganhos_awb(texto):
     try:
         vermelho, azul = (float(valor) for valor in texto.split(","))
@@ -45,11 +62,19 @@ def ganhos_awb(texto):
     return vermelho, azul
 
 
-def criar_camera(largura, altura, fps, awb, awb_gains, camera_num=0):
+def criar_camera(largura, altura, fps, awb, awb_gains, camera_num=0, tuning=""):
+    # O libcamera carrega o tuning ao criar o CameraManager; global_camera_info()
+    # abaixo inicializa esse singleton. Por isso o ambiente precisa estar
+    # definido antes, senao o Picamera2(tuning=...) chega tarde demais.
+    if tuning:
+        os.environ["LIBCAMERA_RPI_TUNING_FILE"] = tuning
+    else:
+        os.environ.pop("LIBCAMERA_RPI_TUNING_FILE", None)
+
     if not Picamera2.global_camera_info():
         raise RuntimeError("Nenhuma camera encontrada pelo libcamera")
 
-    camera = Picamera2(camera_num=camera_num)
+    camera = Picamera2(camera_num=camera_num, tuning=tuning or None)
     config = camera.create_video_configuration(
         main={"size": (largura, altura), "format": "RGB888"},
         buffer_count=2,
@@ -57,10 +82,14 @@ def criar_camera(largura, altura, fps, awb, awb_gains, camera_num=0):
     )
     camera.configure(config)
 
-    controles = {"AwbMode": modo_awb(awb)}
     vermelho, azul = ganhos_awb(awb_gains)
-    if vermelho and azul:
-        controles["ColourGains"] = (vermelho, azul)
+    if vermelho > 0 and azul > 0:
+        controles = {
+            "AwbMode": controls.AwbModeEnum.Custom,
+            "ColourGains": (vermelho, azul),
+        }
+    else:
+        controles = {"AwbMode": modo_awb(awb)}
     camera.set_controls(controles)
 
     camera.start()
@@ -69,9 +98,10 @@ def criar_camera(largura, altura, fps, awb, awb_gains, camera_num=0):
 
 
 def capturar(camera):
-    # A câmera entrega RGB888; o YOLO e as cores do overlay (CORES) usam BGR.
-    frame_rgb = camera.capture_array("main")
-    return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    # O stream "RGB888" do Picamera2 entrega os bytes em BGR na memoria
+    # (request.py: FORMAT_TABLE["RGB888"] == "BGR"). E o formato que o YOLO,
+    # o overlay (CORES) e o cv2.imencode esperam, entao nao ha conversao.
+    return camera.capture_array("main")
 
 
 def carregar_modelo(caminho):
@@ -181,6 +211,177 @@ def desenhar(frame, deteccoes, nomes):
     return contagem
 
 
+def escalar_deteccoes(deteccoes, escala_x, escala_y):
+    return [
+        (
+            int(x1 * escala_x),
+            int(y1 * escala_y),
+            int(x2 * escala_x),
+            int(y2 * escala_y),
+            classe_id,
+            confianca,
+        )
+        for x1, y1, x2, y2, classe_id, confianca in deteccoes
+    ]
+
+
+def preparar_exibicao(frame, deteccoes, largura):
+    """Reduz o frame para a janela e ajusta as caixas para esse tamanho.
+
+    O desenho acontece só na imagem reduzida: evita copiar e anotar o frame
+    em resolução total a cada iteração. O frame original fica intacto para
+    salvar capturas ou gerar o preview da UI.
+    """
+    largura_atual = frame.shape[1]
+    if largura > 0 and largura_atual > largura:
+        altura = max(2, int(frame.shape[0] * largura / largura_atual))
+        exibir = cv2.resize(
+            frame,
+            (largura, altura),
+            interpolation=cv2.INTER_AREA,
+        )
+        escala_x = largura / largura_atual
+        escala_y = altura / frame.shape[0]
+        return exibir, escalar_deteccoes(deteccoes, escala_x, escala_y)
+    return frame.copy(), deteccoes
+
+
+def anotar_frame(frame, deteccoes, nomes):
+    anotado = frame.copy()
+    desenhar(anotado, deteccoes, nomes)
+    return anotado
+
+
+def _interromper(signum, frame):
+    raise KeyboardInterrupt
+
+
+def _janela_disponivel():
+    """Diz se há um servidor X acessível para o cv2.imshow.
+
+    O DISPLAY pode estar definido no SSH mesmo sem X rodando (foi o que
+    aconteceu quando o lightdm parou). Testar o socket evita o abort do Qt.
+    """
+    display = os.environ.get("DISPLAY", "")
+    if not display.startswith(":"):
+        return False
+    numero = display[1:].split(".")[0]
+    caminho = f"/tmp/.X11-unix/X{numero}"
+    if not Path(caminho).exists():
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            sock.connect(caminho)
+    except OSError:
+        return False
+    return True
+
+
+class SaidaFramebuffer:
+    """Desenha frames direto no framebuffer do console, sem X/Wayland.
+
+    É o fallback quando o Qt não consegue abrir a janela (kiosk em tty/DRM).
+    Suporta framebuffer de 16 bpp (RGB565) e 32 bpp (BGRA).
+    """
+
+    def __init__(self, caminho="/dev/fb0"):
+        self.caminho = caminho
+        base = Path("/sys/class/graphics") / Path(caminho).name
+        try:
+            largura, altura = (
+                int(valor) for valor in (base / "virtual_size").read_text().split(",")
+            )
+            self.bpp = int((base / "bits_per_pixel").read_text())
+            self.stride = int((base / "stride").read_text())
+        except (OSError, ValueError) as erro:
+            raise RuntimeError(
+                f"nao foi possivel ler o framebuffer {caminho}: {erro}"
+            ) from None
+        if self.bpp not in (16, 32):
+            raise RuntimeError(f"framebuffer com {self.bpp} bpp nao suportado")
+
+        self.largura = largura
+        self.altura = altura
+        self.bytes_por_pixel = self.bpp // 8
+        try:
+            self.fd = os.open(caminho, os.O_RDWR)
+        except OSError as erro:
+            raise RuntimeError(
+                f"nao foi possivel abrir {caminho}: {erro}"
+            ) from None
+        self.limpar()
+
+    def limpar(self):
+        linha = b"\x00" * self.stride
+        for y in range(self.altura):
+            os.pwrite(self.fd, linha, y * self.stride)
+
+    def _converter(self, frame):
+        if self.bpp == 16:
+            rgb = frame[:, :, ::-1]
+            vermelho = (rgb[:, :, 0] >> 3).astype(np.uint16)
+            verde = (rgb[:, :, 1] >> 2).astype(np.uint16)
+            azul = (rgb[:, :, 2] >> 3).astype(np.uint16)
+            return (vermelho << 11) | (verde << 5) | azul
+        alfa = np.full(frame.shape[:2], 255, dtype=np.uint8)
+        return np.dstack(
+            [frame[:, :, 0], frame[:, :, 1], frame[:, :, 2], alfa]
+        )
+
+    def mostrar(self, frame):
+        altura, largura = frame.shape[:2]
+        if largura > self.largura or altura > self.altura:
+            escala = min(self.largura / largura, self.altura / altura)
+            novo = (
+                max(1, int(largura * escala)),
+                max(1, int(altura * escala)),
+            )
+            frame = cv2.resize(frame, novo, interpolation=cv2.INTER_AREA)
+            altura, largura = frame.shape[:2]
+
+        x = max(0, (self.largura - largura) // 2)
+        y = max(0, (self.altura - altura) // 2)
+        pixels = self._converter(frame)
+
+        forma = (altura, self.largura)
+        if pixels.ndim == 3:
+            forma += (pixels.shape[2],)
+        faixa = np.zeros(forma, dtype=pixels.dtype)
+        faixa[:, x : x + largura] = pixels
+        dados = faixa.tobytes()
+
+        linha_bytes = self.largura * self.bytes_por_pixel
+        if linha_bytes == self.stride:
+            os.pwrite(self.fd, dados, y * self.stride)
+            return
+
+        padding = b"\x00" * (self.stride - linha_bytes)
+        for i in range(altura):
+            inicio = i * linha_bytes
+            fim = inicio + linha_bytes
+            os.pwrite(
+                self.fd,
+                dados[inicio:fim] + padding,
+                (y + i) * self.stride,
+            )
+
+    def fechar(self):
+        os.close(self.fd)
+
+
+def escolher_saida(args):
+    if args.headless or args.ndjson:
+        return "headless"
+    if args.saida in ("janela", "framebuffer", "headless"):
+        return args.saida
+    if _janela_disponivel():
+        return "janela"
+    if Path("/dev/fb0").exists():
+        return "framebuffer"
+    return "headless"
+
+
 def quadro_jpeg(frame, deteccoes, nomes, largura):
     """JPEG anotado em base64 para o preview da UI (passo 4).
 
@@ -267,13 +468,36 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
         args.awb,
         args.awbgains,
         args.camera,
+        args.tuning,
     )
     print(
         f"camera: {args.camera} {args.largura}x{args.altura} | "
         f"inferencia: {infer_largura}x{infer_altura} @ {args.imgsz} | "
-        f"awb: {args.awb} ({args.awbgains})"
+        f"awb: {args.awb} ({args.awbgains}) | "
+        f"tuning: {args.tuning or 'padrao do sistema'}"
     )
 
+    saida = escolher_saida(args)
+    tela = None
+    if saida == "framebuffer":
+        try:
+            tela = SaidaFramebuffer()
+            print("saida: framebuffer /dev/fb0 (Ctrl+C encerra)")
+        except RuntimeError as erro:
+            print(f"aviso: {erro}; usando headless")
+            saida = "headless"
+    elif saida == "janela":
+        print("saida: janela OpenCV")
+    else:
+        print("saida: headless")
+
+    try:
+        signal.signal(signal.SIGTERM, _interromper)
+    except ValueError:
+        pass
+
+    estatisticas = EstatisticasInferencia()
+    inicio_sessao = time.perf_counter()
     contador_salvos = 0
     contador_frames = 0
     ultimo_preview = 0.0
@@ -290,6 +514,7 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
                 infer_largura,
                 infer_altura,
             )
+            estatisticas.registrar(duracao)
             if args.ndjson:
                 # Contrato com a UI (ui/lib/src/visao.dart): uma linha por
                 # frame, sem janela. A UI aplica a regra de estabilidade e
@@ -313,21 +538,22 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
                 if args.max_frames and contador_frames >= args.max_frames:
                     break
                 continue
-            anotado = frame.copy()
-            contagem = desenhar(anotado, deteccoes, nomes)
+
+            contagem = contar_classes(
+                deteccoes, lambda classe_id: nome_da_classe(nomes, classe_id)
+            )
             fps = 1.0 / max(duracao, 1e-9)
 
-            if args.headless:
+            if saida == "headless":
                 print(
                     f"[{duracao:.2f}s | {fps:.2f} inf/s] "
                     f"{resumo_deteccoes(deteccoes, nomes)}"
                 )
             else:
-                exibir = cv2.resize(
-                    anotado,
-                    (960, int(960 * anotado.shape[0] / anotado.shape[1])),
-                    interpolation=cv2.INTER_AREA,
+                exibir, deteccoes_exibir = preparar_exibicao(
+                    frame, deteccoes, args.exibir_largura
                 )
+                desenhar(exibir, deteccoes_exibir, nomes)
                 cv2.putText(
                     exibir,
                     f"inferencia: {duracao:.2f}s ({fps:.2f}/s)",
@@ -337,7 +563,17 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
                     (0, 255, 255),
                     2,
                 )
-                linha = 60
+                cv2.putText(
+                    exibir,
+                    f"media: {estatisticas.media:.2f}s "
+                    f"({estatisticas.fps_inferencia:.2f}/s)",
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 255, 255),
+                    2,
+                )
+                linha = 90
                 for nome, quantidade in contagem.items():
                     cv2.putText(
                         exibir,
@@ -350,18 +586,28 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
                     )
                     linha += 30
 
-                cv2.imshow("pill / no_pill", exibir)
-                tecla = cv2.waitKey(1) & 0xFF
-                if tecla in (ord("q"), 27):
-                    break
-                if tecla == ord("s"):
-                    arquivo = salvar_frame(
-                        anotado,
-                        args.salvar_dir or "capturas",
-                        contador_salvos,
-                    )
-                    print("salvo:", arquivo)
-                    contador_salvos += 1
+                if tela is not None:
+                    tela.mostrar(exibir)
+                else:
+                    cv2.imshow("pill / no_pill", exibir)
+                    tecla = cv2.waitKey(1) & 0xFF
+                    if tecla in (ord("q"), 27):
+                        break
+                    if tecla == ord("s"):
+                        arquivo = salvar_frame(
+                            anotar_frame(frame, deteccoes, nomes),
+                            args.salvar_dir or "capturas",
+                            contador_salvos,
+                        )
+                        print("salvo:", arquivo)
+                        contador_salvos += 1
+                    if (
+                        cv2.getWindowProperty(
+                            "pill / no_pill", cv2.WND_PROP_VISIBLE
+                        )
+                        < 1
+                    ):
+                        break
 
             if (
                 args.salvar_dir
@@ -369,7 +615,7 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
                 and contador_frames % args.salvar_intervalo == 0
             ):
                 arquivo = salvar_frame(
-                    anotado,
+                    anotar_frame(frame, deteccoes, nomes),
                     args.salvar_dir,
                     contador_salvos,
                 )
@@ -379,35 +625,64 @@ def executar_camera(args, modelo, nomes, infer_largura, infer_altura):
             contador_frames += 1
             if args.max_frames and contador_frames >= args.max_frames:
                 break
+    except KeyboardInterrupt:
+        pass
     finally:
         camera.stop()
         camera.close()
+        if tela is not None:
+            tela.fechar()
         cv2.destroyAllWindows()
+        if not args.ndjson:
+            resumo = estatisticas.resumo(time.perf_counter() - inicio_sessao)
+            print(resumo, flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--modelo", default="best_ncnn_model")
     parser.add_argument("--camera", type=int, default=0, help="número da câmera (libcamera)")
-    parser.add_argument("--imgsz", type=int, default=800)
+    # Defaults para o Pi 3B: captura em 720p e inferência em 320x240. Em
+    # 3280x2464 os buffers CMA (RGB888 + RAW) não cabem com folga na Pi 3B de
+    # 1 GB; os argumentos continuam sobrescrevíveis.
+    parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--conf", type=float, default=0.5)
-    parser.add_argument("--largura", type=int, default=3280)
-    parser.add_argument("--altura", type=int, default=2464)
-    parser.add_argument("--infer-largura", type=int, default=800)
-    parser.add_argument("--infer-altura", type=int, default=600)
-    parser.add_argument("--fps-camera", type=float, default=21)
+    parser.add_argument("--largura", type=int, default=1280)
+    parser.add_argument("--altura", type=int, default=720)
+    parser.add_argument("--infer-largura", type=int, default=320)
+    parser.add_argument("--infer-altura", type=int, default=240)
+    parser.add_argument("--fps-camera", type=float, default=15)
     parser.add_argument(
         "--awb",
-        default="custom",
+        default="auto",
         choices=sorted(MODOS_AWB),
         help="modo de balanco de branco (igual ao rpicam-apps)",
     )
     parser.add_argument(
         "--awbgains",
-        default="1.5,1.1",
-        help="ganhos fixos de vermelho e azul, ex: 1.5,1.1 (0,0 = automatico)",
+        default="0,0",
+        help="ganhos fixos de vermelho e azul, ex: 1.5,1.1 (0,0 usa --awb)",
+    )
+    parser.add_argument(
+        "--tuning",
+        default=tuning_padrao(),
+        help="arquivo de tuning do libcamera; vazio usa o padrao do sistema "
+        "(padrao: imx219_noir.json quando presente)",
     )
     parser.add_argument("--threads", type=int, default=2)
+    parser.add_argument(
+        "--exibir-largura",
+        type=int,
+        default=960,
+        help="largura da tela em pixels (0 = sem redução)",
+    )
+    parser.add_argument(
+        "--saida",
+        choices=("auto", "janela", "framebuffer", "headless"),
+        default="auto",
+        help="onde desenhar: auto tenta janela OpenCV e cai no framebuffer "
+        "quando nao ha X/Wayland",
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
         "--ndjson",
@@ -430,7 +705,7 @@ def main():
     parser.add_argument(
         "--preview-largura",
         type=int,
-        default=800,
+        default=640,
         help="largura do JPEG de preview em pixels (0 = sem redução)",
     )
     parser.add_argument("--salvar-dir", default="")

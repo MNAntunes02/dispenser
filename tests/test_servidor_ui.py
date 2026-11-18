@@ -278,7 +278,9 @@ def test_retrato_e_registro_nao_deixam_publicacao_cair(tmp_path):
     try:
         # a publicação tenta entrar enquanto a conexão está em andamento
         def publicar():
-            srv.publicar(envelope("estado", lambda: RELOGIO, fase="DEVOLVA_SLOT", passo=6))
+            srv.publicar(
+                envelope("estado", lambda: RELOGIO, fase="AGUARDANDO_RETORNO", passo=4)
+            )
 
         assert entrou_no_retrato.wait(2.0), "o servidor não aceitou a conexão"
         publicando = threading.Thread(target=publicar)
@@ -287,7 +289,7 @@ def test_retrato_e_registro_nao_deixam_publicacao_cair(tmp_path):
         segura_retrato.set()
         publicando.join(5.0)
         fases = [cliente.receber("estado").get("fase"), cliente.receber("estado").get("fase")]
-        assert "DEVOLVA_SLOT" in fases, f"publicação perdida na conexão: {fases}"
+        assert "AGUARDANDO_RETORNO" in fases, f"publicação perdida na conexão: {fases}"
     finally:
         segura_retrato.set()
         cliente.fechar()

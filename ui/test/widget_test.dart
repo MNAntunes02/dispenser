@@ -21,7 +21,8 @@ import 'package:flutter_test/flutter_test.dart';
 ///
 /// `Subscription.cancel()` só completa fora do zone de fake-async; sem o
 /// `runAsync` o teste trava esperando o future.
-Future<void> encerrar(WidgetTester tester, ClienteCoreFake cliente) => tester.runAsync(() => cliente.dispose());
+Future<void> encerrar(WidgetTester tester, ClienteCoreFake cliente) =>
+    tester.runAsync(() => cliente.dispose());
 
 /// Filtra um stream por subtype (`Stream` não tem `whereType`).
 extension FiltroEvento on Stream<Object?> {
@@ -29,9 +30,17 @@ extension FiltroEvento on Stream<Object?> {
 }
 
 /// Rótulos exatamente como o core manda no retrato.
-const Map<String, Object?> kRotulos = {'v': 1, 'type': 'rotulos', 'ts': '2026-09-29T08:00:00', 'rotulos': kRotulosPadrao, 'totalPassos': 6};
+const Map<String, Object?> kRotulos = {
+  'v': 1,
+  'type': 'rotulos',
+  'ts': '2026-09-29T08:00:00',
+  'rotulos': kRotulosPadrao,
+  'totalPassos': 4,
+};
 
-Map<String, Object?> kAgenda({List<Map<String, Object?>> ocorrencias = const []}) => {
+Map<String, Object?> kAgenda({
+  List<Map<String, Object?>> ocorrencias = const [],
+}) => {
   'v': 1,
   'type': 'agenda',
   'ts': '2026-09-29T08:00:00',
@@ -42,7 +51,9 @@ Map<String, Object?> kAgenda({List<Map<String, Object?>> ocorrencias = const []}
 /// Tela de repouso que o core publica quando não há dose em aberto.
 Map<String, Object?> kRepouso({String proxima = '14:00'}) => kTela(
   chave: proxima.isEmpty ? 'reposo_sem_dose' : 'reposo',
-  mensagem: proxima.isEmpty ? 'Nenhuma dose programada para hoje' : 'Tudo em dia. Próxima dose às $proxima',
+  mensagem: proxima.isEmpty
+      ? 'Nenhuma dose programada para hoje'
+      : 'Tudo em dia. Próxima dose às $proxima',
   fluxo: 'reposo',
   proxima: proxima,
 );
@@ -62,7 +73,7 @@ Map<String, Object?> kTela({
   'ts': '2026-09-29T08:00:00',
   'chave': chave,
   'mensagem': mensagem,
-  'totalPassos': 6,
+  'totalPassos': 4,
   'esperaBotao': esperaBotao,
   'fluxo': fluxo,
   'fase': ?fase,
@@ -76,10 +87,21 @@ const String kPng1x1 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 /// Monta cliente + controlador prontos para o roteiro.
-({ClienteCoreFake cliente, ControladorUI controlador}) _ligado({DetectorConsumo? detector}) {
+({ClienteCoreFake cliente, ControladorUI controlador}) _ligado({
+  DetectorConsumo? detector,
+  DateTime Function()? relogio,
+  Duration limiteSemTela = const Duration(seconds: 5),
+  Duration intervaloVigia = const Duration(seconds: 1),
+}) {
   final memoria = CanalMemoria();
   final cliente = ClienteCoreFake(memoria)..iniciar();
-  final controlador = ControladorUI(cliente, relogio: () => DateTime(2026, 9, 29, 8, 30), detector: detector)..iniciar();
+  final controlador = ControladorUI(
+    cliente,
+    relogio: relogio ?? () => DateTime(2026, 9, 29, 8, 30),
+    detector: detector,
+    limiteSemTela: limiteSemTela,
+    intervaloVigia: intervaloVigia,
+  )..iniciar();
   return (cliente: cliente, controlador: controlador);
 }
 
@@ -88,14 +110,24 @@ void main() {
     test('lê o retrato de rótulos e agenda', () {
       final rotulos = MensagemCore.deJson(kRotulos);
       expect(rotulos, isA<Rotulos>());
-      expect((rotulos as Rotulos).totalPassos, 6);
+      expect((rotulos as Rotulos).totalPassos, 4);
       expect(rotulos.preenchido('pressione_ok', const {}), 'Pressione OK');
-      expect(rotulos.preenchido('passo', {'atual': 2, 'total': 6}), 'Passo 2 de 6');
+      expect(
+        rotulos.preenchido('passo', {'atual': 2, 'total': 4}),
+        'Passo 2 de 4',
+      );
 
       final agenda = MensagemCore.deJson(
         kAgenda(
           ocorrencias: [
-            {'id': 'occ-1', 'medicamento': 'Losartana 50 mg', 'dosagem': '1 comprimido', 'slot': 3, 'horario': '08:00', 'estado': 'ALARME'},
+            {
+              'id': 'occ-1',
+              'medicamento': 'Losartana 50 mg',
+              'dosagem': '1 comprimido',
+              'slot': 3,
+              'horario': '08:00',
+              'estado': 'ALARME',
+            },
           ],
         ),
       );
@@ -104,12 +136,26 @@ void main() {
     });
 
     test('rejeita versão e tipo fora do contrato', () {
-      expect(() => MensagemCore.deJson({'v': 2, 'type': 'health'}), throwsA(isA<MensagemInvalida>()));
-      expect(() => MensagemCore.deJson({'v': 1, 'type': 'doses'}), throwsA(isA<MensagemInvalida>()));
+      expect(
+        () => MensagemCore.deJson({'v': 2, 'type': 'health'}),
+        throwsA(isA<MensagemInvalida>()),
+      );
+      expect(
+        () => MensagemCore.deJson({'v': 1, 'type': 'doses'}),
+        throwsA(isA<MensagemInvalida>()),
+      );
     });
 
     test('tela sem esperaBotao não habilita o botão', () {
-      final tela = MensagemCore.deJson(kTela(chave: 'abra_gaveta', mensagem: 'Abra a gaveta', passo: 2)) as Tela;
+      final tela =
+          MensagemCore.deJson(
+                kTela(
+                  chave: 'abra_gaveta',
+                  mensagem: 'Abra a gaveta',
+                  passo: 1,
+                ),
+              )
+              as Tela;
       expect(tela.esperaBotao, isFalse);
       expect(tela.emFluxo, isTrue);
       expect(tela.doseEmAberto, isTrue);
@@ -121,11 +167,18 @@ void main() {
       final cliente = ClienteCoreFake(CanalMemoria())..iniciar();
       final eventos = <EventoCore>[];
       cliente.eventos.listen(eventos.add);
-      cliente.receberMensagem(kTela(chave: 'hora_remedio', mensagem: 'Hora do remédio: Losartana (1 comprimido)', fase: 'ALARME', passo: 1, esperaBotao: true));
+      cliente.receberMensagem(
+        kTela(
+          chave: 'abra_gaveta',
+          mensagem: 'Abra a gaveta',
+          fase: 'ALARME',
+          passo: 1,
+        ),
+      );
       await pumpEventQueue();
       expect(eventos.first, isA<ConexaoMudou>());
       final recebida = eventos.whereType<MensagemRecebida>().single.mensagem;
-      expect((recebida as Tela).chave, 'hora_remedio');
+      expect((recebida as Tela).chave, 'abra_gaveta');
       await cliente.dispose();
     });
 
@@ -176,7 +229,14 @@ void main() {
       l.cliente.receberMensagem(
         kAgenda(
           ocorrencias: [
-            {'id': 'occ-1', 'medicamento': 'Losartana 50 mg', 'dosagem': '1 comprimido', 'slot': 3, 'horario': '14:00', 'estado': 'AGUARDANDO'},
+            {
+              'id': 'occ-1',
+              'medicamento': 'Losartana 50 mg',
+              'dosagem': '1 comprimido',
+              'slot': 3,
+              'horario': '14:00',
+              'estado': 'AGUARDANDO',
+            },
           ],
         ),
       );
@@ -192,12 +252,19 @@ void main() {
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'hora_remedio', mensagem: 'Hora do remédio: Losartana 50 mg (1 comprimido)', fase: 'ALARME', passo: 1, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'abra_gaveta',
+          mensagem: 'Abra a gaveta',
+          fase: 'ALARME',
+          passo: 1,
+        ),
+      );
       await pumpEventQueue();
       final estado = l.controlador.estado as EstadoDose;
-      expect(estado.tela.mensagem, 'Hora do remédio: Losartana 50 mg (1 comprimido)');
+      expect(estado.tela.mensagem, 'Abra a gaveta');
       expect(estado.tela.passo, 1);
-      expect(l.controlador.podeConfirmar, isTrue);
+      expect(l.controlador.podeConfirmar, isFalse);
       await l.cliente.dispose();
     });
 
@@ -206,13 +273,26 @@ void main() {
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'hora_remedio', mensagem: 'Hora do remédio: Losartana 50 mg (1 comprimido)', fase: 'ALARME', passo: 1, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'abra_gaveta',
+          mensagem: 'Abra a gaveta',
+          fase: 'ALARME',
+          passo: 1,
+        ),
+      );
       await pumpEventQueue();
-      l.cliente.receberMensagem({'v': 1, 'type': 'alerta', 'ts': '2026-09-29T08:05:00', 'codigo': 'F003', 'mensagem': 'Falha F003 no sensor. Avise o cuidador.'});
+      l.cliente.receberMensagem({
+        'v': 1,
+        'type': 'alerta',
+        'ts': '2026-09-29T08:05:00',
+        'codigo': 'F003',
+        'mensagem': 'Falha F003 no sensor. Avise o cuidador.',
+      });
       await pumpEventQueue();
       final estado = l.controlador.estado as EstadoDose;
       expect(estado.aviso!.codigo, 'F003');
-      expect(estado.tela.chave, 'hora_remedio'); // a dose continua na tela
+      expect(estado.tela.chave, 'abra_gaveta'); // a dose continua na tela
       await l.cliente.dispose();
     });
 
@@ -221,7 +301,14 @@ void main() {
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'consuma_e_detectar',
+          mensagem: 'Consuma o medicamento e coloque a cartela na posição de detecção',
+          fase: 'AGUARDANDO_DETECCAO',
+          passo: 2,
+        ),
+      );
       await pumpEventQueue();
       expect(l.controlador.estado, isA<EstadoDose>());
       l.cliente.memoria.cair();
@@ -231,43 +318,75 @@ void main() {
       await l.cliente.dispose();
     });
 
-    test('passo 4 liga a visão; a confirmação da câmera envia o OK', () async {
-      final detector = DetectorConsumoFake();
-      final l = _ligado(detector: detector);
-      l.cliente.receberMensagem(kRotulos);
-      l.cliente.receberMensagem(kAgenda());
-      l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
-      await pumpEventQueue();
-      expect(detector.inicios, 1);
-      expect(l.cliente.memoria.enviados, isEmpty); // ainda não confirmou nada
+    test(
+      'conectado sem tela reconecta e volta ao normal com o retrato',
+      () async {
+        final l = _ligado(
+          relogio: DateTime.now,
+          limiteSemTela: const Duration(milliseconds: 20),
+          intervaloVigia: const Duration(milliseconds: 10),
+        );
+        l.cliente.receberMensagem({
+          'v': 1,
+          'type': 'health',
+          'ts': '2026-09-29T08:00:00',
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        expect(l.cliente.memoria.reconexoes, greaterThanOrEqualTo(1));
 
-      detector.confirmar();
-      await pumpEventQueue();
-      expect(jsonDecode(l.cliente.memoria.enviados.single), {'v': 1, 'type': 'input', 'acao': 'confirma'});
+        l.cliente.receberMensagem(kRotulos);
+        l.cliente.receberMensagem(kAgenda());
+        l.cliente.receberMensagem(kRepouso());
+        await pumpEventQueue();
+        expect(l.controlador.estado, isA<EstadoRepouso>());
+        expect(l.controlador.erroSemTela, isNull);
+        l.controlador.dispose();
+        await l.cliente.dispose();
+      },
+    );
 
-      // a visão não confirma duas vezes pela mesma dose
-      detector.confirmar();
-      await pumpEventQueue();
-      expect(l.cliente.memoria.enviados, hasLength(1));
-
+    test('sem tela depois do limite avisa e para de reconectar', () async {
+      final l = _ligado(
+        relogio: DateTime.now,
+        limiteSemTela: const Duration(milliseconds: 10),
+        intervaloVigia: const Duration(milliseconds: 10),
+      );
+      l.cliente.receberMensagem({
+        'v': 1,
+        'type': 'health',
+        'ts': '2026-09-29T08:00:00',
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(l.cliente.memoria.reconexoes, 2);
+      expect(l.controlador.erroSemTela, isNotNull);
+      expect((l.controlador.estado as EstadoIniciando).erro, isNotNull);
       l.controlador.dispose();
       await l.cliente.dispose();
     });
 
-    test('sair do passo 4 desliga a visão (confirmação fora é ignorada)', () async {
+    test('passo 2 liga a visão; leitura estável não envia OK', () async {
       final detector = DetectorConsumoFake();
       final l = _ligado(detector: detector);
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'consuma_e_detectar',
+          mensagem: 'Consuma o medicamento e coloque a cartela na posição de detecção',
+          fase: 'AGUARDANDO_DETECCAO',
+          passo: 2,
+        ),
+      );
       await pumpEventQueue();
       expect(detector.inicios, 1);
+      expect(l.cliente.memoria.enviados, isEmpty);
 
-      l.cliente.receberMensagem(kTela(chave: 'devolva_slot', mensagem: 'Devolva ao slot 3 e feche a gaveta', fase: 'AGUARDANDO_RETORNO', passo: 5, slot: 3));
+      detector.confirmar();
       await pumpEventQueue();
-      expect(detector.paradas, 1);
+      // A visão é só status: a liberação vem do painel/CLI.
+      expect(l.cliente.memoria.enviados, isEmpty);
+      expect((l.controlador.estado as EstadoDose).visaoEstavel, isTrue);
 
       detector.confirmar();
       await pumpEventQueue();
@@ -276,16 +395,63 @@ void main() {
       l.controlador.dispose();
       await l.cliente.dispose();
     });
+
+    test(
+      'sair do passo 2 desliga a visão (leitura fora é ignorada)',
+      () async {
+        final detector = DetectorConsumoFake();
+        final l = _ligado(detector: detector);
+        l.cliente.receberMensagem(kRotulos);
+        l.cliente.receberMensagem(kAgenda());
+        l.cliente.receberMensagem(kRepouso());
+        l.cliente.receberMensagem(
+          kTela(
+            chave: 'consuma_e_detectar',
+            mensagem: 'Consuma o medicamento e coloque a cartela na posição de detecção',
+            fase: 'AGUARDANDO_DETECCAO',
+            passo: 2,
+          ),
+        );
+        await pumpEventQueue();
+        expect(detector.inicios, 1);
+
+        l.cliente.receberMensagem(
+          kTela(
+            chave: 'devolva_slot',
+            mensagem: 'Devolva ao slot 3 e feche a gaveta',
+            fase: 'AGUARDANDO_RETORNO',
+            passo: 3,
+            slot: 3,
+          ),
+        );
+        await pumpEventQueue();
+        expect(detector.paradas, 1);
+
+        detector.confirmar();
+        await pumpEventQueue();
+        expect(l.cliente.memoria.enviados, isEmpty);
+
+        l.controlador.dispose();
+        await l.cliente.dispose();
+      },
+    );
 
     test('sem detector (nulo) nada é confirmado sozinho', () async {
       final l = _ligado();
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'consuma_e_detectar',
+          mensagem: 'Consuma o medicamento e coloque a cartela na posição de detecção',
+          fase: 'AGUARDANDO_DETECCAO',
+          passo: 2,
+        ),
+      );
       await pumpEventQueue();
       expect(l.cliente.memoria.enviados, isEmpty);
-      expect(l.controlador.podeConfirmar, isTrue); // OK manual segue
+      expect(l.controlador.podeConfirmar, isFalse);
       l.controlador.dispose();
       await l.cliente.dispose();
     });
@@ -298,7 +464,14 @@ void main() {
       l.cliente.receberMensagem(
         kAgenda(
           ocorrencias: [
-            {'id': 'occ-1', 'medicamento': 'Losartana 50 mg', 'dosagem': '1 comprimido', 'slot': 3, 'horario': '14:00', 'estado': 'AGUARDANDO'},
+            {
+              'id': 'occ-1',
+              'medicamento': 'Losartana 50 mg',
+              'dosagem': '1 comprimido',
+              'slot': 3,
+              'horario': '14:00',
+              'estado': 'AGUARDANDO',
+            },
           ],
         ),
       );
@@ -316,66 +489,75 @@ void main() {
       await encerrar(tester, l.cliente);
     });
 
-    testWidgets('fluxo da dose mostra passo, frase e botão OK', (tester) async {
+    testWidgets('fluxo da dose mostra passo e frase, sem botão OK', (
+      tester,
+    ) async {
       final l = _ligado();
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'hora_remedio', mensagem: 'Hora do remédio: Losartana 50 mg (1 comprimido)', fase: 'ALARME', passo: 1, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'abra_gaveta',
+          mensagem: 'Abra a gaveta',
+          fase: 'ALARME',
+          passo: 1,
+        ),
+      );
       await tester.pump();
 
       await tester.pumpWidget(DispenserApp(controlador: l.controlador));
       await tester.pump();
 
-      expect(find.text('Passo 1 de 6'), findsOneWidget);
-      expect(find.text('Hora do remédio: Losartana 50 mg (1 comprimido)'), findsOneWidget);
-      expect(find.text('Pressione OK'), findsOneWidget);
-      l.controlador.dispose();
-      await encerrar(tester, l.cliente);
-    });
-
-    testWidgets('sem botão quando o core não pede OK', (tester) async {
-      final l = _ligado();
-      l.cliente.receberMensagem(kRotulos);
-      l.cliente.receberMensagem(kAgenda());
-      l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'retire_medicamento', mensagem: 'Retire o medicamento do slot 3', fase: 'GAVETA_ABERTA', passo: 3, slot: 3));
-      await tester.pump();
-
-      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
-      await tester.pump();
-
-      expect(find.text('Passo 3 de 6'), findsOneWidget);
+      expect(find.text('Passo 1 de 4'), findsOneWidget);
+      expect(find.text('Abra a gaveta'), findsOneWidget);
       expect(find.text('Pressione OK'), findsNothing);
       l.controlador.dispose();
       await encerrar(tester, l.cliente);
     });
 
-    testWidgets('botão OK devolve apenas a intenção', (tester) async {
+    testWidgets('passo de detecção não mostra botão OK', (tester) async {
       final l = _ligado();
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'consuma_e_detectar',
+          mensagem:
+              'Consuma o medicamento e coloque a cartela na posição de detecção',
+          fase: 'AGUARDANDO_DETECCAO',
+          passo: 2,
+        ),
+      );
       await tester.pump();
 
       await tester.pumpWidget(DispenserApp(controlador: l.controlador));
       await tester.pump();
-      await tester.tap(find.text('Pressione OK'));
-      await tester.pump();
 
-      expect(jsonDecode(l.cliente.memoria.enviados.single), {'v': 1, 'type': 'input', 'acao': 'confirma'});
+      expect(find.text('Passo 2 de 4'), findsOneWidget);
+      expect(find.text('Pressione OK'), findsNothing);
       l.controlador.dispose();
       await encerrar(tester, l.cliente);
     });
 
-    testWidgets('passo 4 mostra o preview da câmera e mantém o botão OK', (tester) async {
+    testWidgets('passo 2 mostra o preview e o status de leitura estável', (
+      tester,
+    ) async {
       final detector = DetectorConsumoFake();
       final l = _ligado(detector: detector);
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'tome_e_ok', mensagem: 'Tome o medicamento e pressione OK', fase: 'MEDICAMENTO_RETIRADO', passo: 4, esperaBotao: true));
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'consuma_e_detectar',
+          mensagem:
+              'Consuma o medicamento e coloque a cartela na posição de detecção',
+          fase: 'AGUARDANDO_DETECCAO',
+          passo: 2,
+        ),
+      );
       await tester.pump();
 
       await tester.pumpWidget(DispenserApp(controlador: l.controlador));
@@ -384,22 +566,70 @@ void main() {
       // Antes do primeiro frame: marcador de câmera, sem inventar instrução.
       expect(find.byType(Image), findsNothing);
       expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
-      expect(find.text('Pressione OK'), findsOneWidget);
+      expect(find.text('Pressione OK'), findsNothing);
+      expect(find.textContaining('Preparando câmera'), findsOneWidget);
+
+      detector.emitirAviso('câmera falhou');
+      await tester.pump();
+      expect(find.textContaining('Câmera: câmera falhou'), findsOneWidget);
 
       detector.emitirQuadro(base64Decode(kPng1x1));
       await tester.pump();
       await tester.pump();
 
       expect(find.byType(Image), findsOneWidget);
-      expect(find.text('Pressione OK'), findsOneWidget);
+      expect(find.textContaining('Aponte a cartela'), findsOneWidget);
 
-      // Ao sair do passo 4 o preview some junto com a câmera.
-      l.cliente.receberMensagem(kTela(chave: 'devolva_slot', mensagem: 'Coloque de volta no slot 3', fase: 'AGUARDANDO_RETORNO', passo: 5, slot: 3));
+      detector.confirmar();
+      await tester.pump();
+      expect(
+        find.text('Leitura estável — aguardando liberação no painel'),
+        findsOneWidget,
+      );
+      expect(l.cliente.memoria.enviados, isEmpty);
+
+      // Ao sair do passo 2 o preview some junto com a câmera.
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'devolva_slot',
+          mensagem: 'Coloque de volta no slot 3',
+          fase: 'AGUARDANDO_RETORNO',
+          passo: 3,
+          slot: 3,
+        ),
+      );
       await tester.pump();
       await tester.pump();
 
       expect(find.byType(Image), findsNothing);
       expect(find.byIcon(Icons.photo_camera_outlined), findsNothing);
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
+    testWidgets('passo 2 sem câmera avisa que a liberação é no painel', (
+      tester,
+    ) async {
+      final l = _ligado();
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(kRepouso());
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'consuma_e_detectar',
+          mensagem:
+              'Consuma o medicamento e coloque a cartela na posição de detecção',
+          fase: 'AGUARDANDO_DETECCAO',
+          passo: 2,
+        ),
+      );
+      await tester.pump();
+
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      await tester.pump();
+
+      expect(find.textContaining('Câmera desativada'), findsOneWidget);
+      expect(find.text('Pressione OK'), findsNothing);
       l.controlador.dispose();
       await encerrar(tester, l.cliente);
     });
@@ -416,13 +646,54 @@ void main() {
       await encerrar(tester, l.cliente);
     });
 
-    testWidgets('aviso do core aparece como faixa, sem cobrir a dose', (tester) async {
+    testWidgets('conectando mostra o erro depois do limite de reconexões', (
+      tester,
+    ) async {
+      var agora = DateTime(2026, 9, 29, 8, 30);
+      final l = _ligado(
+        relogio: () => agora,
+        limiteSemTela: const Duration(seconds: 1),
+        intervaloVigia: const Duration(seconds: 1),
+      );
+      l.cliente.receberMensagem({
+        'v': 1,
+        'type': 'health',
+        'ts': '2026-09-29T08:00:00',
+      });
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      for (var i = 0; i < 5; i++) {
+        agora = agora.add(const Duration(seconds: 1));
+        await tester.pump(const Duration(seconds: 1));
+      }
+
+      expect(find.textContaining('Reinicie o core'), findsOneWidget);
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
+    testWidgets('aviso do core aparece como faixa, sem cobrir a dose', (
+      tester,
+    ) async {
       final l = _ligado();
       l.cliente.receberMensagem(kRotulos);
       l.cliente.receberMensagem(kAgenda());
       l.cliente.receberMensagem(kRepouso());
-      l.cliente.receberMensagem(kTela(chave: 'devolva_slot', mensagem: 'Devolva ao slot 3 e feche a gaveta', fase: 'AGUARDANDO_RETORNO', passo: 5, slot: 3));
-      l.cliente.receberMensagem({'v': 1, 'type': 'alerta', 'ts': '2026-09-29T08:05:00', 'codigo': 'F003', 'mensagem': 'Falha F003 no sensor. Avise o cuidador.'});
+      l.cliente.receberMensagem(
+        kTela(
+          chave: 'devolva_slot',
+          mensagem: 'Devolva ao slot 3 e feche a gaveta',
+          fase: 'AGUARDANDO_RETORNO',
+          passo: 3,
+          slot: 3,
+        ),
+      );
+      l.cliente.receberMensagem({
+        'v': 1,
+        'type': 'alerta',
+        'ts': '2026-09-29T08:05:00',
+        'codigo': 'F003',
+        'mensagem': 'Falha F003 no sensor. Avise o cuidador.',
+      });
       await tester.pump();
 
       await tester.pumpWidget(DispenserApp(controlador: l.controlador));
@@ -431,7 +702,10 @@ void main() {
       expect(find.text('Devolva ao slot 3 e feche a gaveta'), findsOneWidget);
       // uma faixa só, com a mensagem do core e o código do sensor
       expect(find.byType(FaixaAviso), findsOneWidget);
-      expect(find.text('Falha F003 no sensor. Avise o cuidador.'), findsOneWidget);
+      expect(
+        find.text('Falha F003 no sensor. Avise o cuidador.'),
+        findsOneWidget,
+      );
       l.controlador.dispose();
       await encerrar(tester, l.cliente);
     });

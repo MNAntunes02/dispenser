@@ -33,9 +33,9 @@ class Backoff {
     this.fator = 2.0,
     this.jitter = 0.2,
     Random? aleatorio,
-  })  : _minimoS = minimo.inMilliseconds / 1000,
-        _maximoS = maximo.inMilliseconds / 1000,
-        _aleatorio = aleatorio ?? Random();
+  }) : _minimoS = minimo.inMilliseconds / 1000,
+       _maximoS = maximo.inMilliseconds / 1000,
+       _aleatorio = aleatorio ?? Random();
 
   final double _minimoS;
   final double _maximoS;
@@ -76,13 +76,17 @@ abstract interface class CanalCore {
   /// Envia uma linha para o core.
   void enviar(String linha);
 
+  /// Derruba a conexão atual e abre outra (força um novo retrato).
+  void reconectar();
+
   /// Fecha o canal.
   Future<void> dispose();
 }
 
 /// Canal real: Unix socket + JSON linhas, com reconexão automática.
 class CanalSocketUnix implements CanalCore {
-  CanalSocketUnix(this._caminho, {Backoff? backoff}) : _backoff = backoff ?? Backoff();
+  CanalSocketUnix(this._caminho, {Backoff? backoff})
+    : _backoff = backoff ?? Backoff();
 
   final String _caminho;
   final Backoff _backoff;
@@ -114,6 +118,9 @@ class CanalSocketUnix implements CanalCore {
 
   @override
   void enviar(String linha) => _comandos?.send(linha);
+
+  @override
+  void reconectar() => _reconectar();
 
   @override
   Future<void> dispose() async {
@@ -229,7 +236,10 @@ Future<void> _loopSocket(_ArgsSocket args) async {
       buffer.addAll(lido);
       var quebra = buffer.indexOf(0x0a);
       while (quebra >= 0) {
-        final linha = utf8.decode(buffer.sublist(0, quebra), allowMalformed: true);
+        final linha = utf8.decode(
+          buffer.sublist(0, quebra),
+          allowMalformed: true,
+        );
         buffer.removeRange(0, quebra + 1);
         if (linha.trim().isNotEmpty) args.resposta.send(linha);
         quebra = buffer.indexOf(0x0a);
