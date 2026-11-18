@@ -25,10 +25,27 @@ VERSAO = 1
 LIMITE_LINHA = 65536
 
 #: Tipos que o core publica.
-TIPOS_DO_CORE = ("rotulos", "agenda", "estado", "alerta", "health")
+TIPOS_DO_CORE = ("rotulos", "agenda", "estado", "alerta", "health", "estoque")
 
 #: Tipos que a UI envia.
 TIPOS_DA_UI = ("input", "comando", "health")
+
+#: Fluxo de registro de cartela (a câmera lê, o painel/script confirma).
+FLUXO_REGISTRO = "registro"
+CHAVES_REGISTRO = (
+    "registro_posicionar",
+    "registro_slot",
+    "registro_invalido",
+    "registro_sem_slot",
+)
+
+#: Comandos de registro aceitos no `cmd` de `comando`.
+COMANDOS_REGISTRO = (
+    "iniciar_registro",
+    "registrar_leitura",
+    "registrar_manual",
+    "confirmar_registro",
+)
 
 #: Ações de botão aceitas. A política aprovada não tem soneca: só "confirma".
 ACOES_DE_ENTRADA = ("confirma",)
@@ -62,6 +79,7 @@ PASSO_POR_CHAVE: dict[str, int | None] = {
     "relogio_instavel": None,
     "reposo": None,
     "reposo_sem_dose": None,
+    **{chave: None for chave in CHAVES_REGISTRO},
 }
 
 #: Fases em que há uma dose em andamento exibida na tela (retrato da UI).
@@ -132,6 +150,39 @@ def comando_liberar_proximo() -> dict:
     confirmação do consumo é a ação explícita do operador.
     """
     return envelope("comando", cmd="liberar_proximo")
+
+
+def comando_iniciar_registro(medicamento: str | None = None) -> dict:
+    """Inicia o registro: a cartela vai para a posição de detecção."""
+    args = {"medicamento": str(medicamento).strip()} if medicamento else None
+    return envelope("comando", cmd="iniciar_registro", args=args)
+
+
+def comando_registrar_leitura(registro_id: str, quantidade: int) -> dict:
+    """Envia a contagem estável da câmera para o registro em andamento."""
+    return envelope(
+        "comando",
+        cmd="registrar_leitura",
+        args={"registroId": str(registro_id), "quantidade": int(quantidade)},
+    )
+
+
+def comando_registrar_manual(registro_id: str, quantidade: int) -> dict:
+    """Fallback: quantidade informada no painel/CLI (sem leitura estável)."""
+    return envelope(
+        "comando",
+        cmd="registrar_manual",
+        args={"registroId": str(registro_id), "quantidade": int(quantidade)},
+    )
+
+
+def comando_confirmar_registro(registro_id: str) -> dict:
+    """Confirma que a cartela foi colocada no slot indicado pelo core."""
+    return envelope(
+        "comando",
+        cmd="confirmar_registro",
+        args={"registroId": str(registro_id)},
+    )
 
 
 def comando_simular(evento: str, slot: int | None = None) -> dict:

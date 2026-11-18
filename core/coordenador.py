@@ -17,15 +17,20 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from threading import RLock
 from typing import Callable
+from uuid import uuid4
 
 from core.agendador import Agendador
 from core.armazenamento import Database
 from core.config import Config
+from core.estoque import ServicoEstoque, validar_quantidade
 from core.maquina_estados import Acao, Contexto, Fase, processar
 from core.notificador import Notificador
 from core.protocolo_ui import (
+    CHAVES_REGISTRO,
+    COMANDOS_REGISTRO,
     EVENTOS_SIMULAVEIS,
     EVENTOS_SIMULAVEIS_COM_SLOT,
+    FLUXO_REGISTRO,
     envelope,
     passo_de,
 )
@@ -99,7 +104,9 @@ _CHAVE_POR_FASE = {
 
 
 def _fluxo(chave: str) -> str:
-    """Informa à UI como desenhar: fluxo da dose, repouso ou alerta."""
+    """Informa à UI como desenhar: dose, registro, repouso ou alerta."""
+    if chave in CHAVES_REGISTRO:
+        return FLUXO_REGISTRO
     if chave in _CHAVES_REPOSO:
         return "reposo"
     return "dose" if passo_de(chave) is not None else "alerta"
@@ -117,6 +124,7 @@ class Coordenador:
         publicador_ui: PublicadorLog | None = None,
         relogio: Relogio | None = None,
         verificador_relogio: VerificadorRelogio | None = None,
+        estoque: ServicoEstoque | None = None,
     ) -> None:
         self._config = config
         self._db = db
@@ -149,6 +157,8 @@ class Coordenador:
         self._relogio_confiavel = True
         self._relogio_tela_publicada = False
         self._ultimo_codigo: str | None = None
+        self._estoque = estoque or ServicoEstoque(db)
+        self._registro: dict | None = None
 
     # --- ciclo -------------------------------------------------------------
 
@@ -371,6 +381,8 @@ class Coordenador:
             return self._comando_simular(msg.get("args"))
         if cmd == "liberar_proximo":
             return self._comando_liberar_proximo()
+        if cmd in COMANDOS_REGISTRO:
+            return self._comando_registro(cmd, msg.get("args"))
         self._db.registrar_log(f"ui_comando_ignorado:{cmd or 'vazio'}")
         return False
 
@@ -390,7 +402,144 @@ class Coordenador:
                 self._db.registrar_log("liberar_proximo_sem_deteccao")
                 return False
             self._emitir_para(ativa, "liberar_proximo")
+            self._baixar_estoque_dose(ativa)
             return True
+
+    def _baixar_estoque_dose(self, ativa: dict) -> None:
+        """Baixa um comprimido da cartela usada na dose (uma vez por ocorrência)."""
+        slot = (
+            ativa["slot_retorno"]
+            if ativa["slot_retorno"] is not None
+            else ativa["slot"]
+        )
+        if slot is None:
+            self._db.registrar_log("estoque_sem_slot", ativa["id"])
+            return
+        try:
+            baixado = self._estoque.baixar(slot, ativa["id"])
+        except ValueError:
+            # Agenda legada pode vir com índice 0..11 ou sem slot: isso não
+            # pode impedir a liberação da dose.
+            self._db.registrar_log(f"estoque_slot_invalido:{slot}", ativa["id"])
+            return
+        if baixado:
+            self._db.registrar_log("estoque_baixa", ativa["id"], str(slot))
+            self.publicar_estoque()
+
+    def _comando_registro(self, cmd: str, args: object) -> bool:
+        """Comandos de registro de cartela (painel/CLI, ou leitura da UI)."""
+        dados = args if isinstance(args, dict) else {}
+        if cmd == "iniciar_registro":
+            return self._iniciar_registro(str(dados.get("medicamento") or ""))
+        registro_id = str(dados.get("registroId") or "")
+        if cmd == "confirmar_registro":
+            return self._confirmar_registro(registro_id)
+        return self._registrar_quantidade(
+            cmd, registro_id, dados.get("quantidade")
+        )
+
+    def _iniciar_registro(self, medicamento: str) -> bool:
+        """Abre o fluxo de registro e manda a cartela para a detecção."""
+        with self._trava:
+            if self._ativa is not None:
+                self._db.registrar_log("registro_negado_com_dose")
+                return False
+            if self._registro is not None:
+                self._db.registrar_log("registro_ja_andamento")
+                return False
+            self._registro = {
+                "id": uuid4().hex[:8],
+                "fase": "posicionar",
+                "medicamento": medicamento.strip(),
+                "quantidade": None,
+                "slot": None,
+            }
+            self._publicar_tela(
+                "",
+                None,
+                {
+                    "chave": "registro_posicionar",
+                    "registroId": self._registro["id"],
+                },
+            )
+            self._db.registrar_log("registro_iniciado")
+            return True
+
+    def _registrar_quantidade(
+        self, cmd: str, registro_id: str, quantidade: object
+    ) -> bool:
+        """Recebe a leitura da câmera ou a quantidade manual e escolhe o slot."""
+        with self._trava:
+            registro = self._registro
+            if (
+                registro is None
+                or registro["fase"] != "posicionar"
+                or (registro_id and registro["id"] != registro_id)
+            ):
+                self._db.registrar_log(f"registro_quantidade_ignorada:{cmd}")
+                return False
+            try:
+                comprimidos = validar_quantidade(quantidade)
+            except ValueError:
+                self._db.registrar_log("registro_quantidade_invalida")
+                self._publicar_tela("", None, {"chave": "registro_invalido"})
+                return False
+            slot = self._estoque.slot_vazio_maior()
+            if slot is None:
+                self._db.registrar_log("registro_sem_slot_vazio")
+                self._registro = None
+                self._publicar_tela("", None, {"chave": "registro_sem_slot"})
+                return False
+            registro["fase"] = "slot"
+            registro["quantidade"] = comprimidos
+            registro["slot"] = slot
+            self._publicar_tela(
+                "",
+                None,
+                {
+                    "chave": "registro_slot",
+                    "registroId": registro_id,
+                    "slot": slot,
+                    "quantidade": comprimidos,
+                },
+            )
+            self._db.registrar_log(
+                "registro_slot_escolhido", detalhe=f"slot:{slot}"
+            )
+            return True
+
+    def _confirmar_registro(self, registro_id: str) -> bool:
+        """Efetiva a cartela no slot indicado e volta à tela de aguardo."""
+        with self._trava:
+            registro = self._registro
+            if (
+                registro is None
+                or registro["fase"] != "slot"
+                or (registro_id and registro["id"] != registro_id)
+            ):
+                self._db.registrar_log("registro_confirmacao_ignorada")
+                return False
+            slot = int(registro["slot"])
+            quantidade = int(registro["quantidade"])
+            self._estoque.registrar(slot, quantidade, registro["medicamento"])
+            self._db.registrar_log(
+                "registro_estoque_confirmado", detalhe=f"slot:{slot},qtd:{quantidade}"
+            )
+            self._registro = None
+            self._ultima_tela = None
+            self._publicar_reposo_se_precisa()
+            self.publicar_estoque()
+            if self._ativa is not None:
+                self._republicar_tela()
+            return True
+
+    def _cancelar_registro(self) -> None:
+        """Um dose devida interrompe o registro (a dose tem prioridade)."""
+        if self._registro is None:
+            return
+        self._db.registrar_log("registro_cancelado_por_dose")
+        self._registro = None
+        self._ultima_tela = None
 
     def _comando_simular(self, args: object) -> bool:
         """Injeta um evento de sensor na ponte (painel de desenvolvimento).
@@ -441,7 +590,7 @@ class Coordenador:
         Sem isso a UI ficaria em "conectando" para sempre: o core precisa dizer
         explicitamente que está ocioso e qual é a próxima dose.
         """
-        if self._ativa is not None:
+        if self._ativa is not None or self._registro is not None:
             return
         atual = self._ultima_tela
         if atual is not None and atual.get("chave") not in _CHAVES_REPOSO:
@@ -483,6 +632,14 @@ class Coordenador:
         self._agenda_sujeja = False
         self._publicador_ui.publicar(self._msg_agenda())
 
+    def _msg_estoque(self) -> dict:
+        return envelope("estoque", self._relogio, itens=self._estoque.mensagem())
+
+    def publicar_estoque(self) -> None:
+        """Publica o estado dos 12 slots e atualiza o retrato da UI."""
+        self._publicador_ui.publicar(self._msg_estoque())
+        self._atualizar_retrato()
+
     def retrato(self) -> list[dict]:
         """Estado completo para a UI que acabou de (re)conectar."""
         mensagens = [
@@ -494,6 +651,7 @@ class Coordenador:
             )
         ]
         mensagens.append(self._msg_agenda())
+        mensagens.append(self._msg_estoque())
         if self._ultima_tela is not None:
             mensagens.append(self._ultima_tela)
         return mensagens
@@ -534,6 +692,7 @@ class Coordenador:
         hh, mm = (int(p) for p in base["horario"].split(":"))
         agendada = datetime.combine(date.fromisoformat(base["dia"]), time(hh, mm))
         if agendada <= self._relogio():
+            self._cancelar_registro()
             self._emitir_para(base, "horario_chegou")
 
     # --- timeouts ----------------------------------------------------------
@@ -746,20 +905,22 @@ class Coordenador:
         params = {k: v for k, v in dados.items() if k != "chave"}
         mensagem = texto(f"{chave}{variante}", **params)
         passo = passo_de(chave)
-        msg = envelope(
-            "estado",
-            self._relogio,
-            fase=fase,
-            ocorrenciaId=occ_id,
-            chave=chave,
-            mensagem=mensagem,
-            passo=passo,
-            totalPassos=TOTAL_PASSOS,
-            slot=dados.get("slot"),
-            proxima=dados.get("proxima") or "",
-            esperaBotao=fase in _FASES_ESPERAM_BOTAO,
-            fluxo=_fluxo(chave),
-        )
+        campos: dict = {
+            "fase": fase,
+            "ocorrenciaId": occ_id,
+            "chave": chave,
+            "mensagem": mensagem,
+            "passo": passo,
+            "totalPassos": TOTAL_PASSOS,
+            "slot": dados.get("slot"),
+            "proxima": dados.get("proxima") or "",
+            "esperaBotao": fase in _FASES_ESPERAM_BOTAO,
+            "fluxo": _fluxo(chave),
+        }
+        for chave_extra in ("registroId", "quantidade", "medicamento"):
+            if chave_extra in dados:
+                campos[chave_extra] = dados[chave_extra]
+        msg = envelope("estado", self._relogio, **campos)
         self._ultima_tela = msg
         self._publicador_ui.publicar(msg)
 

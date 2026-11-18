@@ -31,6 +31,7 @@ sealed class MensagemCore {
       'rotulos' => Rotulos.deJson(json),
       'agenda' => Agenda.deJson(json),
       'estado' => Tela.deJson(json),
+      'estoque' => Estoque.deJson(json),
       'alerta' => Aviso.deJson(json),
       'health' => const Health(),
       _ => throw MensagemInvalida('tipo fora do contrato: $tipo'),
@@ -146,6 +147,62 @@ class Agenda extends MensagemCore {
   static const vazia = Agenda('', []);
 }
 
+/// Um slot do grid de estoque (mensagem `estoque` do core).
+class ItemEstoque {
+  const ItemEstoque({
+    required this.slot,
+    required this.rotulo,
+    required this.linha,
+    required this.coluna,
+    required this.medicamento,
+    required this.quantidade,
+    required this.vazio,
+  });
+
+  final int slot;
+  final String rotulo;
+  final int linha;
+  final String coluna;
+  final String medicamento;
+  final int quantidade;
+  final bool vazio;
+
+  factory ItemEstoque.deJson(Map<String, Object?> json) => ItemEstoque(
+    slot: json['slot'] is int ? json['slot'] as int : 0,
+    rotulo: '${json['rotulo'] ?? ''}',
+    linha: json['linha'] is int ? json['linha'] as int : 0,
+    coluna: '${json['coluna'] ?? 'esquerda'}',
+    medicamento: '${json['medicamento'] ?? ''}',
+    quantidade: json['quantidade'] is int ? json['quantidade'] as int : 0,
+    vazio: json['vazio'] == true,
+  );
+}
+
+/// Estoque dos 12 slots (mensagem `estoque` do core).
+class Estoque extends MensagemCore {
+  const Estoque(this.itens);
+
+  final List<ItemEstoque> itens;
+
+  @override
+  String get tipo => 'estoque';
+
+  static const vazio = Estoque([]);
+
+  factory Estoque.deJson(Map<String, Object?> json) {
+    final itens = <ItemEstoque>[];
+    final bruto = json['itens'];
+    if (bruto is List) {
+      for (final item in bruto) {
+        if (item is Map) {
+          itens.add(ItemEstoque.deJson(item.cast<String, Object?>()));
+        }
+      }
+    }
+    return Estoque(itens);
+  }
+}
+
 /// A tela atual do fluxo, pronta para exibir (mensagem `estado`).
 class Tela extends MensagemCore {
   const Tela({
@@ -159,6 +216,8 @@ class Tela extends MensagemCore {
     this.proxima = '',
     this.esperaBotao = false,
     this.fluxo = 'dose',
+    this.registroId = '',
+    this.quantidade,
   });
 
   final String chave;
@@ -177,8 +236,14 @@ class Tela extends MensagemCore {
   /// Mantido por compatibilidade; o fluxo atual não exibe botão OK.
   final bool esperaBotao;
 
-  /// `dose` ou `alerta` (chave fora do fluxo guiado).
+  /// `dose`, `registro`, `reposo` ou `alerta`.
   final String fluxo;
+
+  /// Identificador do registro de cartela em andamento.
+  final String registroId;
+
+  /// Contagem de comprimidos informada pelo core no registro.
+  final int? quantidade;
 
   @override
   String get tipo => 'estado';
@@ -203,6 +268,8 @@ class Tela extends MensagemCore {
       proxima: '${json['proxima'] ?? ''}',
       esperaBotao: json['esperaBotao'] == true,
       fluxo: '${json['fluxo'] ?? 'dose'}',
+      registroId: '${json['registroId'] ?? ''}',
+      quantidade: json['quantidade'] is int ? json['quantidade'] as int : null,
     );
   }
 }

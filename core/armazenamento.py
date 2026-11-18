@@ -138,6 +138,17 @@ class Database:
                 payload TEXT NOT NULL,
                 atualizado_em TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS estoque (
+                slot INTEGER PRIMARY KEY,
+                medicamento TEXT NOT NULL DEFAULT '',
+                quantidade INTEGER NOT NULL DEFAULT 0,
+                atualizado_em TEXT
+            );
+            CREATE TABLE IF NOT EXISTS estoque_baixas (
+                ocorrencia_id TEXT NOT NULL,
+                slot INTEGER NOT NULL,
+                PRIMARY KEY (ocorrencia_id, slot)
+            );
             """
         )
 

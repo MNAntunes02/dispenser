@@ -88,6 +88,19 @@ class ClienteCore {
   void confirmar() =>
       canal.enviar(jsonEncode({'v': 1, 'type': 'input', 'acao': 'confirma'}));
 
+  /// Envia a contagem estável da câmera para o registro de cartela.
+  ///
+  /// É um dado de sensor, não uma confirmação de dose: o core quem escolhe o
+  /// slot e o painel/script quem confirma a colocação.
+  void registrarLeitura(String registroId, int quantidade) => canal.enviar(
+    jsonEncode({
+      'v': 1,
+      'type': 'comando',
+      'cmd': 'registrar_leitura',
+      'args': {'registroId': registroId, 'quantidade': quantidade},
+    }),
+  );
+
   /// Derruba a conexão atual para receber o retrato de novo.
   void reconectar() => canal.reconectar();
 
