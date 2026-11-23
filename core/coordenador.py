@@ -159,6 +159,8 @@ class Coordenador:
         self._ultimo_codigo: str | None = None
         self._estoque = estoque or ServicoEstoque(db)
         self._registro: dict | None = None
+        #: Motivo da última intenção da UI recusada (para o app mostrar o erro).
+        self._motivo_ui = ""
 
     # --- ciclo -------------------------------------------------------------
 
@@ -314,6 +316,9 @@ class Coordenador:
                 perdidas.append(occ["id"])
         if perdidas:
             self._db.marcar_nao_atendida(perdidas)
+            # A UI já conectada precisa saber que essas doses saíram da agenda;
+            # sem isso ela segue exibindo-as como próximas para sempre.
+            self._agenda_sujeja = True
             # Sem nome de medicamento no log (LGPD).
             self._db.registrar_log("doses_passadas", detalhe=str(len(perdidas)))
         return perdidas
@@ -363,12 +368,23 @@ class Coordenador:
         # retrato pronto a UI ficaria em "conectando" até o próximo estado.
         self._atualizar_retrato()
 
+    def motivo_ui(self) -> str:
+        """Motivo legível da última recusa de comando da UI ('' se ok)."""
+        return self._motivo_ui
+
+    def _recusar(self, tipo: str) -> bool:
+        """Registra e guarda o motivo de uma intenção recusada."""
+        self._motivo_ui = tipo
+        self._db.registrar_log(f"ui_recusada:{tipo}")
+        return False
+
     def entrada_ui(self, msg: dict) -> bool:
         """Trata uma mensagem da UI. A UI só informa intenção; o core decide."""
         tipo = msg.get("type")
         if tipo == "input":
             return self._acao_ui(str(msg.get("acao") or ""))
         if tipo == "comando":
+            self._motivo_ui = ""
             return self._comando_ui(msg)
         if tipo == "health":
             return True
@@ -383,6 +399,10 @@ class Coordenador:
             return self._comando_liberar_proximo()
         if cmd in COMANDOS_REGISTRO:
             return self._comando_registro(cmd, msg.get("args"))
+        if cmd == "limpar_slot":
+            return self._comando_limpar_slot(msg.get("args"))
+        if cmd == "consumir_slot":
+            return self._comando_consumir_slot(msg.get("args"))
         self._db.registrar_log(f"ui_comando_ignorado:{cmd or 'vazio'}")
         return False
 
@@ -426,31 +446,79 @@ class Coordenador:
             self._db.registrar_log("estoque_baixa", ativa["id"], str(slot))
             self.publicar_estoque()
 
+    def _comando_limpar_slot(self, args: object) -> bool:
+        """Esvazia um slot do estoque (ação administrativa via painel/CLI)."""
+        dados = args if isinstance(args, dict) else {}
+        with self._trava:
+            try:
+                item = self._estoque.limpar(dados.get("slot"))
+            except ValueError:
+                self._db.registrar_log("estoque_limpar_invalido")
+                return False
+            self._db.registrar_log("estoque_limpo", detalhe=str(item.slot))
+            self.publicar_estoque()
+            return True
+
+    def _comando_consumir_slot(self, args: object) -> bool:
+        """Desconta comprimidos manualmente de um slot (painel/CLI)."""
+        dados = args if isinstance(args, dict) else {}
+        quantidade = dados.get("quantidade", 1)
+        with self._trava:
+            try:
+                item, consumido = self._estoque.consumir(
+                    dados.get("slot"), quantidade
+                )
+            except ValueError as erro:
+                self._db.registrar_log(
+                    "estoque_consumo_invalido", detalhe=str(erro)
+                )
+                return False
+            self._db.registrar_log(
+                "estoque_consumo_manual",
+                detalhe=f"slot:{item.slot},qtd:{consumido},restante:{item.quantidade}",
+            )
+            self.publicar_estoque()
+            return True
+
     def _comando_registro(self, cmd: str, args: object) -> bool:
         """Comandos de registro de cartela (painel/CLI, ou leitura da UI)."""
         dados = args if isinstance(args, dict) else {}
         if cmd == "iniciar_registro":
-            return self._iniciar_registro(str(dados.get("medicamento") or ""))
+            return self._iniciar_registro(
+                str(dados.get("medicamento") or ""),
+                str(dados.get("dosagem") or dados.get("mg") or ""),
+                str(dados.get("registroId") or ""),
+            )
         registro_id = str(dados.get("registroId") or "")
+        if cmd == "cancelar_registro":
+            return self.cancelar_registro(registro_id)
         if cmd == "confirmar_registro":
             return self._confirmar_registro(registro_id)
         return self._registrar_quantidade(
             cmd, registro_id, dados.get("quantidade")
         )
 
-    def _iniciar_registro(self, medicamento: str) -> bool:
+    def _iniciar_registro(
+        self, medicamento: str, dosagem: str = "", registro_id: str = ""
+    ) -> bool:
         """Abre o fluxo de registro e manda a cartela para a detecção."""
         with self._trava:
             if self._ativa is not None:
                 self._db.registrar_log("registro_negado_com_dose")
-                return False
+                return self._recusar("dose_em_andamento")
             if self._registro is not None:
+                # Retry do app (ou comando reprocessado após queda): se é o
+                # mesmo cadastro, nada a fazer — não é erro.
+                if registro_id and self._registro["id"] == registro_id:
+                    self._db.registrar_log("registro_repetido_aceito")
+                    return True
                 self._db.registrar_log("registro_ja_andamento")
-                return False
+                return self._recusar("registro_ja_andamento")
             self._registro = {
-                "id": uuid4().hex[:8],
+                "id": registro_id[:64] if registro_id else uuid4().hex[:8],
                 "fase": "posicionar",
                 "medicamento": medicamento.strip(),
+                "dosagem": dosagem.strip(),
                 "quantidade": None,
                 "slot": None,
             }
@@ -477,19 +545,19 @@ class Coordenador:
                 or (registro_id and registro["id"] != registro_id)
             ):
                 self._db.registrar_log(f"registro_quantidade_ignorada:{cmd}")
-                return False
+                return self._recusar("cadastro_nao_esta_na_fase")
             try:
                 comprimidos = validar_quantidade(quantidade)
             except ValueError:
                 self._db.registrar_log("registro_quantidade_invalida")
                 self._publicar_tela("", None, {"chave": "registro_invalido"})
-                return False
+                return self._recusar("quantidade_invalida")
             slot = self._estoque.slot_vazio_maior()
             if slot is None:
                 self._db.registrar_log("registro_sem_slot_vazio")
                 self._registro = None
                 self._publicar_tela("", None, {"chave": "registro_sem_slot"})
-                return False
+                return self._recusar("sem_slot_vazio")
             registro["fase"] = "slot"
             registro["quantidade"] = comprimidos
             registro["slot"] = slot
@@ -518,10 +586,15 @@ class Coordenador:
                 or (registro_id and registro["id"] != registro_id)
             ):
                 self._db.registrar_log("registro_confirmacao_ignorada")
-                return False
+                return self._recusar("cadastro_nao_esta_na_fase")
             slot = int(registro["slot"])
             quantidade = int(registro["quantidade"])
-            self._estoque.registrar(slot, quantidade, registro["medicamento"])
+            self._estoque.registrar(
+                slot,
+                quantidade,
+                registro["medicamento"],
+                registro.get("dosagem", ""),
+            )
             self._db.registrar_log(
                 "registro_estoque_confirmado", detalhe=f"slot:{slot},qtd:{quantidade}"
             )
@@ -533,13 +606,60 @@ class Coordenador:
                 self._republicar_tela()
             return True
 
+    def cancelar_registro(self, registro_id: str = "") -> bool:
+        """Cancela o cadastro em andamento (app ou dose com prioridade)."""
+        with self._trava:
+            registro = self._registro
+            if registro is None:
+                return self._recusar("nenhum_cadastro_ativo")
+            if registro_id and registro["id"] != registro_id:
+                self._db.registrar_log("registro_cancelacao_ignorada")
+                return self._recusar("registro_id_diferente")
+            self._db.registrar_log("registro_cancelado")
+            self._registro = None
+            self._ultima_tela = None
+            self._publicar_reposo_se_precisa()
+            return True
+
     def _cancelar_registro(self) -> None:
-        """Um dose devida interrompe o registro (a dose tem prioridade)."""
-        if self._registro is None:
-            return
+        """Uma dose devida interrompe o registro (a dose tem prioridade)."""
+        self.cancelar_registro()
         self._db.registrar_log("registro_cancelado_por_dose")
-        self._registro = None
-        self._ultima_tela = None
+
+    def retrato_registro(self) -> dict:
+        """Estado do cadastro para publicar no Firestore (`Registro/estado`).
+
+        Com `fase` vazia o app sabe que o fluxo terminou (confirmado/cancelado).
+        """
+        with self._trava:
+            registro = self._registro
+            if registro is None:
+                return {"fase": "", "registroId": "", "mensagem": ""}
+            fase = str(registro.get("fase") or "")
+            quantidade = registro.get("quantidade")
+            slot = registro.get("slot")
+            if fase == "slot" and quantidade and slot:
+                mensagem = texto(
+                    "registro_slot", quantidade=quantidade, slot=slot
+                )
+            elif fase == "posicionar":
+                mensagem = texto("registro_posicionar")
+            else:
+                mensagem = ""
+            return {
+                "registroId": str(registro.get("id") or ""),
+                "fase": fase,
+                "slot": slot,
+                "quantidade": quantidade,
+                "medicamento": str(registro.get("medicamento") or ""),
+                "dosagem": str(registro.get("dosagem") or ""),
+                "mensagem": mensagem,
+            }
+
+    def retrato_estoque(self) -> list[dict]:
+        """Cópia dos 12 slots para publicar no Firestore (`Estoque`)."""
+        with self._trava:
+            return [dict(item) for item in self._estoque.mensagem()]
 
     def _comando_simular(self, args: object) -> bool:
         """Injeta um evento de sensor na ponte (painel de desenvolvimento).
@@ -859,6 +979,9 @@ class Coordenador:
         self._db.atualizar_ocorrencia(
             occ_id, estado=nova_fase.value, tentativas=novas_tentativas
         )
+        # Toda transição altera a lista de doses em aberto da UI (inclusive
+        # CONCLUIDA/NAO_ATENDIDA): o próximo tick deve republicar a `agenda`.
+        self._agenda_sujeja = True
         for acao in acoes:
             self._executar_acao(acao, occ_id, nova_fase.value)
         nova = self._db.obter_ocorrencia(occ_id)

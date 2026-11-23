@@ -5,11 +5,18 @@ enfileirados em SQLite com idempotência por chave. O transporte real
 (Firestore, Fase 3) fornece a agenda, registra `dose_tomada` no `Historico` e
 (a Fase 6, ADR 010) publica os avisos do cuidador em `Notificacoes`; aqui ficam
 a fila, a fonte local da agenda (cache) e a orquestração do ciclo.
+
+A ponte com o app mobile acrescenta `Dispensadores/{id}/Comandos` (intenções
+do cadastro de cartela) e a publicação de `Estoque` e `Registro/estado`.
+Comandos são executados **na thread do core** — quem decide o estoque e o
+fluxo é o coordenador; o sync só transporta e confirma o resultado.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
+from typing import Callable
 
 from core.armazenamento import Database
 from core.transporte import Transporte, registro_historico, registro_notificacao
@@ -162,9 +169,180 @@ class Sincronizador:
             item["ocorrencia_id"], item["tipo"], aviso
         )
 
-    def ciclo(self) -> dict:
-        """Um ciclo completo de sincronização (agenda + eventos)."""
+    # --- ponte com o app mobile (estoque e cadastro de cartela) -------------
+
+    _PRAZO_COMANDO = timedelta(minutes=2)
+
+    def processar_comandos(
+        self, executar: Callable[[dict], bool | tuple[bool, str]]
+    ) -> int:
+        """Executa comandos pendentes do app e grava o resultado no Firestore.
+
+        O doc é marcado `processando` **antes** da execução: se o core cair no
+        meio do caminho, um `processando` antigo é retomado em vez de virar
+        duplicidade de cadastro. A execução é síncrona (thread do core).
+        """
+        try:
+            comandos = self._transporte.ler_comandos()
+        except Exception:
+            return 0
+        processados = 0
+        for comando in comandos:
+            comando_id = str(comando.get("id") or "")
+            if not comando_id:
+                continue
+            status = str(comando.get("status") or "")
+            if status not in ("pendente", "processando"):
+                continue
+            if status == "processando" and not self._comando_expirado(comando):
+                continue
+            try:
+                self._transporte.gravar_comando(
+                    comando_id,
+                    {
+                        "status": "processando",
+                        "processadoEm": datetime.now().isoformat(timespec="seconds"),
+                    },
+                )
+                executado = executar(comando)
+                if isinstance(executado, tuple):
+                    ok, motivo = bool(executado[0]), str(executado[1] or "")
+                else:
+                    ok, motivo = bool(executado), ""
+            except Exception as erro:
+                ok, motivo = False, "erro_interno"
+                self._ultimo_erro = f"{erro.__class__.__name__}: {erro}"
+            try:
+                resultado = {"ok": ok}
+                if not ok and motivo:
+                    resultado["motivo"] = motivo
+                self._transporte.gravar_comando(
+                    comando_id,
+                    {
+                        "status": "concluido" if ok else "erro",
+                        "processadoEm": datetime.now().isoformat(timespec="seconds"),
+                        "resultado": resultado,
+                    },
+                )
+            except Exception:
+                pass  # o core já executou; falha só de publicação do resultado
+            processados += 1
+        return processados
+
+    @classmethod
+    def _comando_expirado(cls, comando: dict) -> bool:
+        valor = comando.get("processadoEm") or comando.get("criadoEm")
+        if not isinstance(valor, str):
+            return True
+        try:
+            return datetime.now() - datetime.fromisoformat(valor) > cls._PRAZO_COMANDO
+        except ValueError:
+            return True
+
+    def descartar_comandos_antigos(self, max_idade: timedelta | None = None) -> int:
+        """Cancela no boot comandos `pendente` que o app já abandonou.
+
+        Sem isto, uma tentativa que morreu no timeout volta a ser processada
+        depois da reinicialização e abre um cadastro que bloqueia o novo.
+        """
+        prazo = max_idade or self._PRAZO_COMANDO
+        try:
+            comandos = self._transporte.ler_comandos()
+        except Exception:
+            return 0
+        cancelados = 0
+        for comando in comandos:
+            comando_id = str(comando.get("id") or "")
+            criado = comando.get("criadoEm")
+            if (
+                not comando_id
+                or comando.get("status") != "pendente"
+                or not isinstance(criado, str)
+            ):
+                continue
+            try:
+                idade = datetime.now() - datetime.fromisoformat(criado)
+            except ValueError:
+                continue
+            if idade <= prazo:
+                continue
+            try:
+                if self._transporte.gravar_comando(
+                    comando_id,
+                    {
+                        "status": "cancelado",
+                        "processadoEm": datetime.now().isoformat(timespec="seconds"),
+                    },
+                ):
+                    cancelados += 1
+            except Exception:
+                continue
+        return cancelados
+
+    def publicar_estoque(self, itens: list[dict]) -> bool:
+        try:
+            return bool(self._transporte.gravar_estoque(itens))
+        except Exception:
+            return False
+
+    def publicar_registro(self, estado: dict) -> bool:
+        try:
+            return bool(self._transporte.gravar_registro(estado))
+        except Exception:
+            return False
+
+    def publicar_saude(self, estado: dict) -> bool:
+        """Publica o batimento da ponte para o app não ficar no escuro."""
+        try:
+            return bool(self._transporte.gravar_saude(estado))
+        except Exception:
+            return False
+
+    def atender_dispositivo(
+        self,
+        executar: Callable[[dict], bool | tuple[bool, str]],
+        estoque: list[dict],
+        registro: dict,
+        saude: dict | None = None,
+    ) -> dict:
+        """Executa comandos do app e publica estoque/estado após mudanças."""
+        processados = self.processar_comandos(executar)
+        publicados = 0
+        if processados:
+            if self.publicar_estoque(estoque):
+                publicados += 1
+            if self.publicar_registro(registro):
+                publicados += 1
+        if saude is not None and self.publicar_saude(saude):
+            publicados += 1
+        return {"comandos": processados, "publicados": publicados}
+
+    def ciclo(
+        self,
+        *,
+        executar_comando: Callable[[dict], bool | tuple[bool, str]] | None = None,
+        estoque: list[dict] | None = None,
+        registro: dict | None = None,
+        saude: dict | None = None,
+    ) -> dict:
+        """Um ciclo completo de sincronização (agenda + eventos + dispositivo)."""
         agendou = self.atualizar_agenda()
         if not agendou and self._ultimo_erro:
             self._db.registrar_log("sync_agenda_falhou", detalhe=self._ultimo_erro)
-        return {"agenda": agendou, "enviados": self.enviar_pendentes()}
+        resumo = {"agenda": agendou, "enviados": self.enviar_pendentes()}
+        if executar_comando is not None:
+            resumo.update(
+                self.atender_dispositivo(
+                    executar_comando, estoque or [], registro or {}, saude
+                )
+            )
+        else:
+            publicados = 0
+            if estoque is not None and self.publicar_estoque(estoque):
+                publicados += 1
+            if registro is not None and self.publicar_registro(registro):
+                publicados += 1
+            if saude is not None and self.publicar_saude(saude):
+                publicados += 1
+            resumo["publicados"] = publicados
+        return resumo

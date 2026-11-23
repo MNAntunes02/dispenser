@@ -100,6 +100,7 @@ def test_estoque_e_comandos_de_registro_seguem_o_contrato():
         "registrar_leitura",
         "registrar_manual",
         "confirmar_registro",
+        "cancelar_registro",
     }
     mensagem = envelope("estoque", lambda: RELOGIO, itens=[])
     assert decodificar(codificar(mensagem), tipos=TIPOS_DO_CORE) == mensagem

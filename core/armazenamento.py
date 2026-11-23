@@ -141,6 +141,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS estoque (
                 slot INTEGER PRIMARY KEY,
                 medicamento TEXT NOT NULL DEFAULT '',
+                dosagem TEXT NOT NULL DEFAULT '',
                 quantidade INTEGER NOT NULL DEFAULT 0,
                 atualizado_em TEXT
             );
@@ -165,6 +166,14 @@ class Database:
         if "slot_retorno" not in colunas:
             self.conexao.execute(
                 "ALTER TABLE ocorrencias ADD COLUMN slot_retorno INTEGER"
+            )
+        colunas_estoque = {
+            linha["name"]
+            for linha in self.conexao.execute("PRAGMA table_info(estoque)")
+        }
+        if "dosagem" not in colunas_estoque:
+            self.conexao.execute(
+                "ALTER TABLE estoque ADD COLUMN dosagem TEXT NOT NULL DEFAULT ''"
             )
         agora = self._agora()
         for antiga, nova in _MIGRACAO_FASES:

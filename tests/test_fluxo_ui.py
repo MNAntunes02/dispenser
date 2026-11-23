@@ -57,6 +57,7 @@ class ClienteUI:
         self._buffer = b""
         self.telas: list[dict] = []
         self.alertas: list[dict] = []
+        self.agendas: list[dict] = []
         self.conectado = True
 
     def bombear(self, timeout: float = 0.05) -> None:
@@ -93,6 +94,8 @@ class ClienteUI:
                 self.telas.append(msg)
             elif msg.get("type") == "alerta":
                 self.alertas.append(msg)
+            elif msg.get("type") == "agenda":
+                self.agendas.append(msg)
 
     def liberar_proximo(self) -> None:
         self._sock.sendall(b'{"v":1,"type":"comando","cmd":"liberar_proximo"}\n')
@@ -238,6 +241,59 @@ def test_fluxo_dose_completo_pelo_socket(montagem):
         assert _estado(coord, db) == "CONCLUIDA"
         assert ui.telas[-1]["passo"] == 4
         assert ui.telas[-1]["esperaBotao"] is not True
+    finally:
+        ui.fechar()
+
+
+def test_conclusao_republica_agenda_com_estado_atualizado(montagem):
+    """A UI conectada não pode ficar com a dose concluída em "próxima"."""
+    coord, ponte, servidor, db = montagem
+    ui = ClienteUI(servidor.caminho)
+    try:
+        assert _rodar_ate(coord, servidor, ui, "abra_gaveta")
+        # A agenda é publicada no tick seguinte ao da inserção da ocorrência.
+        for _ in range(3):
+            coord.tick()
+            ui.bombear()
+            servidor.aguardar_proxima(CONFIG.tick_s)
+        assert ui.agendas, "o retrato já traz a agenda do dia"
+        occ_id = db.ocorrencias_do_dia(datetime.now().date().isoformat())[0][
+            "id"
+        ]
+        assert any(
+            o["id"] == occ_id and o["estado"] != "CONCLUIDA"
+            for agenda in ui.agendas
+            for o in agenda["ocorrencias"]
+        )
+        antes = len(ui.agendas)
+
+        # Mesmo fluxo do teste completo, até a dose ser registrada como tomada.
+        ponte.simular({"e": "gaveta_aberta"})
+        assert _rodar_ate(coord, servidor, ui, "consuma_e_detectar")
+        ponte.simular({"e": "slot_ausente", "slot": 0})
+        for _ in range(10):
+            coord.tick()
+            ui.bombear()
+            servidor.aguardar_proxima(CONFIG.tick_s)
+        ui.liberar_proximo()
+        assert _rodar_ate(coord, servidor, ui, "devolva_slot")
+        ponte.simular({"e": "slot_presente", "slot": 0})
+        ponte.simular({"e": "gaveta_fechada"})
+        assert _rodar_ate(coord, servidor, ui, "tudo_certo")
+        assert _estado(coord, db) == "CONCLUIDA"
+
+        # A agenda é publicada no tick seguinte ao da transição de estado.
+        for _ in range(3):
+            coord.tick()
+            ui.bombear()
+            servidor.aguardar_proxima(CONFIG.tick_s)
+
+        assert len(ui.agendas) > antes, "a conclusão deve publicar agenda nova"
+        assert any(
+            o["id"] == occ_id and o["estado"] == "CONCLUIDA"
+            for agenda in ui.agendas
+            for o in agenda["ocorrencias"]
+        ), "a agenda recebida pela UI deve marcar a dose como CONCLUIDA"
     finally:
         ui.fechar()
 

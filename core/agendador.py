@@ -64,7 +64,7 @@ class Agendador:
                             id=f"{mid}|{dia.isoformat()}|{h}",
                             medicamento=mid,
                             medicamento_nome=med.get("nome", ""),
-                            dosagem=med.get("dosagem", ""),
+                            dosagem=med.get("mg") or med.get("dosagem", ""),
                             slot=None,
                             dia=dia.isoformat(),
                             horario=h,

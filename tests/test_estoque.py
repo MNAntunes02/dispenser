@@ -67,6 +67,7 @@ def test_mensagem_tem_12_slots_com_posicao_e_quantidade(db: Database):
         "linha": 1,
         "coluna": "esquerda",
         "medicamento": "Losartana",
+        "dosagem": "",
         "quantidade": 8,
         "vazio": False,
     }
@@ -89,7 +90,7 @@ def test_registro_substitui_cartela_do_mesmo_slot(db: Database):
     servico.registrar(5, 20, "Novo")
 
     itens = {item.slot: item for item in servico.itens()}
-    assert itens[5] == ItemEstoque(5, "Novo", 20, itens[5].atualizado_em)
+    assert itens[5] == ItemEstoque(5, "Novo", "", 20, itens[5].atualizado_em)
 
 
 def test_baixa_e_idempotente_por_ocorrencia(db: Database):

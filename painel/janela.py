@@ -277,7 +277,12 @@ class Aplicacao:
 
         ttk.Label(linha, text=TEXTOS["registro_medicamento"]).pack(side="left")
         self._medicamento_var = tk.StringVar(master=self._janela)
-        ttk.Entry(linha, textvariable=self._medicamento_var, width=28).pack(
+        ttk.Entry(linha, textvariable=self._medicamento_var, width=22).pack(
+            side="left", padx=(4, 8)
+        )
+        ttk.Label(linha, text=TEXTOS["registro_dosagem"]).pack(side="left")
+        self._dosagem_var = tk.StringVar(master=self._janela)
+        ttk.Entry(linha, textvariable=self._dosagem_var, width=10).pack(
             side="left", padx=(4, 10)
         )
         ttk.Button(
@@ -307,7 +312,10 @@ class Aplicacao:
         ).pack(side="left")
 
     def _iniciar_registro(self) -> None:
-        self._comandos.iniciar_registro(self._medicamento_var.get().strip())
+        self._comandos.iniciar_registro(
+            self._medicamento_var.get().strip(),
+            self._dosagem_var.get().strip(),
+        )
         self._registrar_linha(
             "core", "painel", texto("registro_iniciado")
         )

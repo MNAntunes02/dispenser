@@ -647,8 +647,8 @@ def main():
     # 1 GB; os argumentos continuam sobrescrevíveis.
     parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--conf", type=float, default=0.5)
-    parser.add_argument("--largura", type=int, default=1280)
-    parser.add_argument("--altura", type=int, default=720)
+    parser.add_argument("--largura", type=int, default=3280)
+    parser.add_argument("--altura", type=int, default=2464)
     parser.add_argument("--infer-largura", type=int, default=320)
     parser.add_argument("--infer-altura", type=int, default=240)
     parser.add_argument("--fps-camera", type=float, default=15)

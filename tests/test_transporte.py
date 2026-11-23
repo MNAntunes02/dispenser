@@ -102,6 +102,7 @@ def test_normalizar_medicamentos_para_agendador():
             "id": "med1",
             "nome": "Paracetamol",
             "dosagem": "500",
+            "mg": "",
             "dias": [{"dia_semana": "sáb", "horario": ["08:00", "20:00"]}],
         }
     ]

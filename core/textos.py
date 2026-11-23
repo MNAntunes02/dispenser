@@ -48,6 +48,7 @@ ROTULOS_UI: dict[str, str] = {
     "passo": "Passo {atual} de {total}",
     "reposo": "Aguardando a próxima dose",
     "proxima_dose": "Próxima dose",
+    "proximas_doses": "Próximas doses",
     "sem_dose_hoje": "Nenhuma dose programada para hoje",
     "conectando": "Conectando...",
     "sem_conexao": "Sem conexão com o core",

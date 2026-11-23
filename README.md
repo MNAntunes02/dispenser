@@ -111,6 +111,44 @@ inicia/para/reinicia o core e a UI Flutter no PC e mostra os logs dos dois:
 - Requer `python3-tk` no Ubuntu (`sudo apt install python3-tk`, se faltar);
   o Tkinter já vem na maioria dos desktops.
 
+### Scripts de CLI de estoque (dev)
+
+Os scripts abaixo falam o protocolo do core pelo socket Unix (padrão em dev:
+`.run/core.sock`, alterável com `--socket`). Exigem o `dispenser-core` em
+execução (ex.: via `python -m painel`).
+
+**Registrar cartela em um slot** (`painel.registrar`): o core escolhe o maior
+slot vazio ao receber a quantidade; a confirmação grava no estoque.
+
+```bash
+# 1) Inicia o registro (posiciona a cartela para detecção)
+.venv/bin/python -m painel.registrar iniciar [--medicamento "Losartana"] [--dosagem "50mg"]
+# --dosagem tem alias --mg
+
+# 2) Informa a quantidade (fallback manual, sem câmera)
+.venv/bin/python -m painel.registrar manual --quantidade 10 [--id <registroId>]
+
+# 3) Confirma a colocação no slot indicado pelo core
+.venv/bin/python -m painel.registrar confirmar [--id <registroId>]
+```
+
+`--id` é opcional em `manual`/`confirmar`: se omitido, vale para o registro em
+andamento.
+
+**Excluir ou consumir medicamento de um slot** (`painel.estoque`, ação
+administrativa manual, com log e atualização da UI):
+
+```bash
+# Esvazia o slot (remove medicamento/dosagem e zera quantidade). Alias: limpar
+.venv/bin/python -m painel.estoque excluir --slot 12
+
+# Desconta comprimidos do slot (padrão: 1). Rejeita slot vazio ou quantidade
+# insuficiente; se chegar a 0, o slot é esvaziado.
+.venv/bin/python -m painel.estoque consumir --slot 12 [--quantidade 1]
+```
+
+O consumo manual é distinto da baixa automática por ocorrência no fluxo de dose.
+
 ## Instalação no Pi (Fase 7/8)
 
 O instalador **não faz nada por padrão**: sem `--executar`, ele só mostra o

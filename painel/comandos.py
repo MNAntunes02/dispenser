@@ -20,8 +20,10 @@ from typing import Callable
 from core.protocolo_ui import (
     codificar,
     comando_confirmar_registro,
+    comando_consumir_slot,
     comando_iniciar_registro,
     comando_liberar_proximo,
+    comando_limpar_slot,
     comando_registrar_leitura,
     comando_registrar_manual,
     comando_simular,
@@ -63,11 +65,15 @@ class ComandosCore:
         ).start()
 
     def iniciar_registro(
-        self, medicamento: str = "", *, assincrono: bool = True
+        self,
+        medicamento: str = "",
+        dosagem: str = "",
+        *,
+        assincrono: bool = True,
     ) -> bool:
         """Inicia a leitura da cartela (painel ou script)."""
         return self._enviar_ou_thread(
-            comando_iniciar_registro(medicamento or None),
+            comando_iniciar_registro(medicamento or None, dosagem or None),
             "painel-iniciar-registro",
             assincrono,
         )
@@ -129,6 +135,24 @@ class ComandosCore:
             ).start()
             return True
         return self._enviar(msg)
+
+    def limpar_slot(self, slot: int, *, assincrono: bool = True) -> bool:
+        """Esvazia um slot do estoque (ação administrativa)."""
+        return self._enviar_ou_thread(
+            comando_limpar_slot(slot),
+            "painel-limpar-slot",
+            assincrono,
+        )
+
+    def consumir_slot(
+        self, slot: int, quantidade: int = 1, *, assincrono: bool = True
+    ) -> bool:
+        """Desconta comprimidos de um slot manualmente."""
+        return self._enviar_ou_thread(
+            comando_consumir_slot(slot, quantidade),
+            "painel-consumir-slot",
+            assincrono,
+        )
 
     def _enviar(self, msg: dict) -> bool:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

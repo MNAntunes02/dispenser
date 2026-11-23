@@ -26,6 +26,7 @@ class ItemEstoque:
 
     slot: int
     medicamento: str = ""
+    dosagem: str = ""
     quantidade: int = 0
     atualizado_em: str | None = None
 
@@ -41,6 +42,7 @@ class ItemEstoque:
             "linha": linha_slot(self.slot),
             "coluna": coluna_slot(self.slot),
             "medicamento": self.medicamento,
+            "dosagem": self.dosagem,
             "quantidade": self.quantidade,
             "vazio": self.vazio,
         }
@@ -69,11 +71,12 @@ class ServicoEstoque:
             int(linha["slot"]): ItemEstoque(
                 slot=int(linha["slot"]),
                 medicamento=str(linha["medicamento"] or ""),
+                dosagem=str(linha["dosagem"] or ""),
                 quantidade=max(0, int(linha["quantidade"])),
                 atualizado_em=linha["atualizado_em"],
             )
             for linha in self._db.conexao.execute(
-                "SELECT slot, medicamento, quantidade, atualizado_em FROM estoque"
+                "SELECT slot, medicamento, dosagem, quantidade, atualizado_em FROM estoque"
             ).fetchall()
             if int(linha["slot"]) in SLOTS
         }
@@ -88,25 +91,33 @@ class ServicoEstoque:
         vazios = [item.slot for item in self.itens() if item.vazio]
         return max(vazios) if vazios else None
 
-    def registrar(self, slot: object, quantidade: object, medicamento: str = "") -> ItemEstoque:
+    def registrar(
+        self,
+        slot: object,
+        quantidade: object,
+        medicamento: str = "",
+        dosagem: str = "",
+    ) -> ItemEstoque:
         """Grava/substitui a cartela de um slot e devolve o estado final."""
         numero = validar_slot(slot)
         comprimidos = validar_quantidade(quantidade)
         nome = str(medicamento or "").strip()
+        mg = str(dosagem or "").strip()
         agora = self._db._agora()
         self._db.conexao.execute(
             """
-            INSERT INTO estoque (slot, medicamento, quantidade, atualizado_em)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO estoque (slot, medicamento, dosagem, quantidade, atualizado_em)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(slot) DO UPDATE SET
                 medicamento = excluded.medicamento,
+                dosagem = excluded.dosagem,
                 quantidade = excluded.quantidade,
                 atualizado_em = excluded.atualizado_em
             """,
-            (numero, nome, comprimidos, agora),
+            (numero, nome, mg, comprimidos, agora),
         )
         self._db.conexao.commit()
-        return ItemEstoque(numero, nome, comprimidos, agora)
+        return ItemEstoque(numero, nome, mg, comprimidos, agora)
 
     def baixar(self, slot: object, ocorrencia_id: str) -> bool:
         """Desconta um comprimido na liberação da dose.
@@ -125,8 +136,8 @@ class ServicoEstoque:
             if marcador.rowcount == 0:
                 return False
             conn.execute(
-                "INSERT OR IGNORE INTO estoque (slot, medicamento, quantidade, atualizado_em) "
-                "VALUES (?, '', 0, ?)",
+                "INSERT OR IGNORE INTO estoque (slot, medicamento, dosagem, quantidade, atualizado_em) "
+                "VALUES (?, '', '', 0, ?)",
                 (numero, agora),
             )
             conn.execute(
@@ -135,3 +146,75 @@ class ServicoEstoque:
                 (agora, numero),
             )
         return True
+
+    def limpar(self, slot: object) -> ItemEstoque:
+        """Esvazia o slot (remove medicamento/dosagem/quantidade)."""
+        numero = validar_slot(slot)
+        agora = self._db._agora()
+        self._db.conexao.execute(
+            """
+            INSERT INTO estoque (slot, medicamento, dosagem, quantidade, atualizado_em)
+            VALUES (?, '', '', 0, ?)
+            ON CONFLICT(slot) DO UPDATE SET
+                medicamento = '',
+                dosagem = '',
+                quantidade = 0,
+                atualizado_em = excluded.atualizado_em
+            """,
+            (numero, agora),
+        )
+        self._db.conexao.commit()
+        return ItemEstoque(numero, "", "", 0, agora)
+
+    def consumir(self, slot: object, quantidade: object = 1) -> tuple[ItemEstoque, int]:
+        """Desconta comprimidos manualmente (ação administrativa, sem ocorrência).
+
+        Rejeita slot vazio, quantidade inválida ou maior que o disponível.
+        Se o estoque chegar a zero, o slot é limpo.
+        """
+        numero = validar_slot(slot)
+        try:
+            qtd = int(quantidade)
+        except (TypeError, ValueError) as erro:
+            raise ValueError(f"quantidade inválida: {quantidade!r}") from erro
+        if not 1 <= qtd <= MAX_COMPRIMIDOS:
+            raise ValueError(f"quantidade fora da faixa 1..{MAX_COMPRIMIDOS}: {qtd}")
+
+        conn = self._db.conexao
+        agora = self._db._agora()
+        with conn:
+            linha = conn.execute(
+                "SELECT medicamento, dosagem, quantidade FROM estoque WHERE slot = ?",
+                (numero,),
+            ).fetchone()
+            atual = max(0, int(linha["quantidade"])) if linha else 0
+            if atual <= 0:
+                raise ValueError(f"slot vazio: {numero}")
+            if qtd > atual:
+                raise ValueError(
+                    f"quantidade insuficiente no slot {numero}: {qtd} > {atual}"
+                )
+            restante = atual - qtd
+            if restante <= 0:
+                conn.execute(
+                    """
+                    INSERT INTO estoque (slot, medicamento, dosagem, quantidade, atualizado_em)
+                    VALUES (?, '', '', 0, ?)
+                    ON CONFLICT(slot) DO UPDATE SET
+                        medicamento = '',
+                        dosagem = '',
+                        quantidade = 0,
+                        atualizado_em = excluded.atualizado_em
+                    """,
+                    (numero, agora),
+                )
+                item = ItemEstoque(numero, "", "", 0, agora)
+            else:
+                conn.execute(
+                    "UPDATE estoque SET quantidade = ?, atualizado_em = ? WHERE slot = ?",
+                    (restante, agora, numero),
+                )
+                medicamento = str(linha["medicamento"] or "") if linha else ""
+                dosagem = str(linha["dosagem"] or "") if linha else ""
+                item = ItemEstoque(numero, medicamento, dosagem, restante, agora)
+        return item, qtd

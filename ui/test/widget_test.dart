@@ -15,6 +15,7 @@ import 'package:dispenser_ui/src/rotulos.dart';
 import 'package:dispenser_ui/src/telas.dart';
 import 'package:dispenser_ui/src/visao.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Encerra o cliente dentro de `testWidgets`.
@@ -23,6 +24,23 @@ import 'package:flutter_test/flutter_test.dart';
 /// `runAsync` o teste trava esperando o future.
 Future<void> encerrar(WidgetTester tester, ClienteCoreFake cliente) =>
     tester.runAsync(() => cliente.dispose());
+
+/// Confirma o layout das telas de câmera: instrução à esquerda, preview à direita.
+void esperarTextoAEsquerdaDaCamera(WidgetTester tester, String mensagem) {
+  final texto = find.text(mensagem);
+  final camera = find.byType(PreviewCamera);
+  expect(tester.getRect(texto).right, lessThan(tester.getRect(camera).left));
+
+  final colunaTexto = tester.getRect(find.ancestor(of: texto, matching: find.byType(Expanded)).first);
+  final colunaCamera = tester.getRect(find.ancestor(of: camera, matching: find.byType(Expanded)).first);
+  expect(colunaCamera.width, greaterThan(colunaTexto.width));
+}
+
+/// Confirma que a instrução quebra linha em vez de encolher inteira no FittedBox.
+void esperarInstrucaoQuebrarLinha(WidgetTester tester, String mensagem) {
+  final paragrafo = tester.renderObject<RenderParagraph>(find.text(mensagem));
+  expect(paragrafo.size.height, greaterThan(paragrafo.preferredLineHeight * 1.5));
+}
 
 /// Filtra um stream por subtype (`Stream` não tem `whereType`).
 extension FiltroEvento on Stream<Object?> {
@@ -581,6 +599,125 @@ void main() {
       expect(find.textContaining('14:00'), findsOneWidget);
       expect(find.textContaining('Losartana'), findsOneWidget);
       expect(find.byIcon(Icons.wifi), findsOneWidget);
+      expect(find.textContaining('PRÓXIMA DOSE'), findsNothing);
+
+      // O cartão precisa ser lays-out de verdade: ele já esteve na árvore com
+      // `width: double.infinity` sob um FittedBox (restrições ilimitadas), o
+      // que abortava o layout e o deixava invisível na tela.
+      final cartao = find.byType(CartaoProximaDose);
+      expect(cartao, findsOneWidget);
+      final caixa = tester.renderObject<RenderBox>(cartao);
+      expect(caixa.size.width, greaterThan(0));
+      expect(caixa.size.height, greaterThan(0));
+      expect(tester.takeException(), isNull);
+
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
+    testWidgets('repouso mostra até três doses em aberto, sem rótulo', (
+      tester,
+    ) async {
+      final l = _ligado();
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(
+        kAgenda(
+          ocorrencias: [
+            {
+              'id': 'occ-0',
+              'medicamento': 'Losartana 50 mg',
+              'dosagem': '1 comprimido',
+              'slot': 3,
+              'horario': '08:00',
+              'estado': 'CONCLUIDA',
+            },
+            {
+              'id': 'occ-1',
+              'medicamento': 'Cafeína 500 mg',
+              'dosagem': '1 comprimido',
+              'slot': 1,
+              'horario': '14:00',
+              'estado': 'AGUARDANDO',
+            },
+            {
+              'id': 'occ-2',
+              'medicamento': 'Dipirona 500 mg',
+              'dosagem': '1 comprimido',
+              'slot': 2,
+              'horario': '16:00',
+              'estado': 'AGUARDANDO',
+            },
+            {
+              'id': 'occ-3',
+              'medicamento': 'Vitamina D 2000 UI',
+              'dosagem': '1 comprimido',
+              'slot': 4,
+              'horario': '18:00',
+              'estado': 'AGUARDANDO',
+            },
+            {
+              'id': 'occ-4',
+              'medicamento': 'Melatonina 3 mg',
+              'dosagem': '1 comprimido',
+              'slot': 5,
+              'horario': '22:00',
+              'estado': 'AGUARDANDO',
+            },
+          ],
+        ),
+      );
+      l.cliente.receberMensagem(kRepouso());
+      await tester.pump();
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      await tester.pump();
+
+      final cartoes = find.byType(CartaoProximaDose);
+      expect(cartoes, findsNWidgets(3));
+      expect(find.textContaining('Cafeína'), findsOneWidget);
+      expect(find.textContaining('Dipirona'), findsOneWidget);
+      expect(find.textContaining('Vitamina D'), findsOneWidget);
+      expect(find.textContaining('Losartana'), findsNothing); // concluída
+      expect(find.textContaining('Melatonina'), findsNothing); // 4ª em aberto
+      expect(find.textContaining('PRÓXIMA DOSE'), findsNothing);
+      for (var i = 0; i < cartoes.evaluate().length; i++) {
+        final caixa = tester.renderObject<RenderBox>(cartoes.at(i));
+        expect(caixa.size.width, greaterThan(0));
+        expect(caixa.size.height, greaterThan(0));
+      }
+      expect(tester.takeException(), isNull);
+
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
+    testWidgets('repouso sem dose em aberto mostra o aviso e nenhum cartão', (
+      tester,
+    ) async {
+      final l = _ligado();
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(
+        kAgenda(
+          ocorrencias: [
+            {
+              'id': 'occ-0',
+              'medicamento': 'Losartana 50 mg',
+              'dosagem': '1 comprimido',
+              'slot': 3,
+              'horario': '08:00',
+              'estado': 'CONCLUIDA',
+            },
+          ],
+        ),
+      );
+      l.cliente.receberMensagem(kRepouso(proxima: ''));
+      await tester.pump();
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      await tester.pump();
+
+      expect(find.text('Nenhuma dose programada para hoje'), findsOneWidget);
+      expect(find.byType(CartaoProximaDose), findsNothing);
+      expect(tester.takeException(), isNull);
+
       l.controlador.dispose();
       await encerrar(tester, l.cliente);
     });
@@ -664,6 +801,14 @@ void main() {
       expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
       expect(find.text('Pressione OK'), findsNothing);
       expect(find.textContaining('Preparando câmera'), findsOneWidget);
+      esperarTextoAEsquerdaDaCamera(
+        tester,
+        'Consuma o medicamento e coloque a cartela na posição de detecção',
+      );
+      esperarInstrucaoQuebrarLinha(
+        tester,
+        'Consuma o medicamento e coloque a cartela na posição de detecção',
+      );
 
       detector.emitirAviso('câmera falhou');
       await tester.pump();
@@ -822,10 +967,43 @@ void main() {
       await tester.pump();
 
       expect(find.byType(GridEstoque), findsOneWidget);
-      expect(find.text('Slot 1'), findsOneWidget);
-      expect(find.text('Slot 12'), findsOneWidget);
+      expect(find.textContaining('Slot '), findsNothing);
       expect(find.text('Vazio'), findsNWidgets(11));
       expect(find.textContaining('Losartana · 7 comprimidos'), findsOneWidget);
+      l.controlador.dispose();
+      await encerrar(tester, l.cliente);
+    });
+
+    testWidgets('repouso coloca o estoque na lateral direita e o aviso na base', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1024, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final l = _ligado();
+      l.cliente.receberMensagem(kRotulos);
+      l.cliente.receberMensagem(kAgenda());
+      l.cliente.receberMensagem(kEstoque());
+      l.cliente.receberMensagem(kRepouso());
+      l.cliente.receberMensagem({
+        'v': 1,
+        'type': 'alerta',
+        'ts': '2026-09-29T08:05:00',
+        'codigo': 'F003',
+        'mensagem': 'Falha F003 no sensor. Avise o cuidador.',
+      });
+      await tester.pump();
+
+      await tester.pumpWidget(DispenserApp(controlador: l.controlador));
+      await tester.pump();
+
+      final grade = tester.getRect(find.byType(GridEstoque));
+      final aviso = tester.getRect(find.byType(FaixaAviso));
+
+      expect(grade.left, greaterThan(tester.view.physicalSize.width / 2));
+      expect(aviso.top, greaterThanOrEqualTo(grade.bottom));
+
       l.controlador.dispose();
       await encerrar(tester, l.cliente);
     });
@@ -853,6 +1031,14 @@ void main() {
       expect(find.text('Posicione a cartela na área de detecção'), findsOneWidget);
       expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
       expect(find.textContaining('Preparando câmera'), findsOneWidget);
+      esperarTextoAEsquerdaDaCamera(
+        tester,
+        'Posicione a cartela na área de detecção',
+      );
+      esperarInstrucaoQuebrarLinha(
+        tester,
+        'Posicione a cartela na área de detecção',
+      );
 
       detector.emitirQuadro(base64Decode(kPng1x1));
       await tester.pump();

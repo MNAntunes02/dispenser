@@ -14,12 +14,10 @@ import 'modelo.dart';
 import 'tema.dart';
 
 /// Formata horas/datas em pt-BR (a UI não traduz texto de domínio, só relógio).
-String hora(DateTime momento) =>
-    '${momento.hour.toString().padLeft(2, '0')}:${momento.minute.toString().padLeft(2, '0')}';
+String hora(DateTime momento) => '${momento.hour.toString().padLeft(2, '0')}:${momento.minute.toString().padLeft(2, '0')}';
 
 /// Rótulo de um passo, no formato do core ("Passo 2 de 6").
-String rotuloPasso(Rotulos rotulos, int atual, int total) =>
-    rotulos.preenchido('passo', {'atual': atual, 'total': total});
+String rotuloPasso(Rotulos rotulos, int atual, int total) => rotulos.preenchido('passo', {'atual': atual, 'total': total});
 
 /// Tela principal: escolhe o estado e desenha.
 class TelaDispensador extends StatelessWidget {
@@ -33,24 +31,15 @@ class TelaDispensador extends StatelessWidget {
       listenable: controlador,
       builder: (context, _) => Scaffold(
         body: switch (controlador.estado) {
-          EstadoSemCore(:final momento, :final rotulos, :final erro) =>
-            TelaSemCore(momento: momento, rotulos: rotulos, erro: erro),
-          EstadoIniciando(:final momento, :final rotulos, :final erro) =>
-            TelaIniciando(momento: momento, rotulos: rotulos, erro: erro),
-          EstadoRepouso(
-            :final momento,
-            :final rotulos,
-            :final agenda,
-            :final estoque,
-            :final aviso,
-          ) =>
-            TelaRepouso(
-              momento: momento,
-              rotulos: rotulos,
-              agenda: agenda,
-              estoque: estoque,
-              aviso: aviso,
-            ),
+          EstadoSemCore(:final momento, :final rotulos, :final erro) => TelaSemCore(momento: momento, rotulos: rotulos, erro: erro),
+          EstadoIniciando(:final momento, :final rotulos, :final erro) => TelaIniciando(momento: momento, rotulos: rotulos, erro: erro),
+          EstadoRepouso(:final momento, :final rotulos, :final agenda, :final estoque, :final aviso) => TelaRepouso(
+            momento: momento,
+            rotulos: rotulos,
+            agenda: agenda,
+            estoque: estoque,
+            aviso: aviso,
+          ),
           EstadoRegistro(
             :final momento,
             :final rotulos,
@@ -74,28 +63,18 @@ class TelaDispensador extends StatelessWidget {
               visaoAviso: visaoAviso,
               visaoEspera: visaoEspera,
             ),
-          EstadoDose(
-            :final momento,
-            :final rotulos,
-            :final tela,
-            :final aviso,
-            :final visaoAtiva,
-            :final visaoEstavel,
-            :final visaoAviso,
-            :final visaoEspera,
-          ) =>
-            TelaDose(
-              momento: momento,
-              rotulos: rotulos,
-              tela: tela,
-              aviso: aviso,
-              quadro: controlador.quadro,
-              visaoAtiva: visaoAtiva,
-              visaoEstavel: visaoEstavel,
-              visaoAviso: visaoAviso,
-              visaoEspera: visaoEspera,
-              aoConfirmar: controlador.confirmar,
-            ),
+          EstadoDose(:final momento, :final rotulos, :final tela, :final aviso, :final visaoAtiva, :final visaoEstavel, :final visaoAviso, :final visaoEspera) => TelaDose(
+            momento: momento,
+            rotulos: rotulos,
+            tela: tela,
+            aviso: aviso,
+            quadro: controlador.quadro,
+            visaoAtiva: visaoAtiva,
+            visaoEstavel: visaoEstavel,
+            visaoAviso: visaoAviso,
+            visaoEspera: visaoEspera,
+            aoConfirmar: controlador.confirmar,
+          ),
         },
       ),
     );
@@ -104,12 +83,7 @@ class TelaDispensador extends StatelessWidget {
 
 /// Sem core: nada é afirmado sobre a dose, só o que fazer.
 class TelaSemCore extends StatelessWidget {
-  const TelaSemCore({
-    super.key,
-    required this.momento,
-    required this.rotulos,
-    this.erro,
-  });
+  const TelaSemCore({super.key, required this.momento, required this.rotulos, this.erro});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -141,10 +115,7 @@ class TelaSemCore extends StatelessWidget {
             if (erro != null) ...[
               const SizedBox(height: Espaco.l),
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Espaco.l,
-                  vertical: Espaco.s,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: Espaco.l, vertical: Espaco.s),
                 decoration: BoxDecoration(
                   color: Cores.painel,
                   border: Border.all(color: Cores.borda, width: 2),
@@ -166,12 +137,7 @@ class TelaSemCore extends StatelessWidget {
 
 /// Core conectado, retrato ainda a caminho.
 class TelaIniciando extends StatelessWidget {
-  const TelaIniciando({
-    super.key,
-    required this.momento,
-    required this.rotulos,
-    this.erro,
-  });
+  const TelaIniciando({super.key, required this.momento, required this.rotulos, this.erro});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -190,11 +156,7 @@ class TelaIniciando extends StatelessWidget {
             const SizedBox(
               width: 96,
               height: 96,
-              child: CircularProgressIndicator(
-                color: Cores.destaque,
-                strokeWidth: 8,
-                strokeCap: StrokeCap.round,
-              ),
+              child: CircularProgressIndicator(color: Cores.destaque, strokeWidth: 8, strokeCap: StrokeCap.round),
             ),
             const SizedBox(height: Espaco.xl),
             Text(
@@ -219,14 +181,7 @@ class TelaIniciando extends StatelessWidget {
 
 /// Repouso: hora, próxima dose, estoque dos 12 slots e estado da conexão.
 class TelaRepouso extends StatelessWidget {
-  const TelaRepouso({
-    super.key,
-    required this.momento,
-    required this.rotulos,
-    required this.agenda,
-    required this.estoque,
-    this.aviso,
-  });
+  const TelaRepouso({super.key, required this.momento, required this.rotulos, required this.agenda, required this.estoque, this.aviso});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -236,7 +191,12 @@ class TelaRepouso extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final proxima = agenda.emAberto ?? agenda.primeira;
+    final proximas = agenda.proximas;
+    // O FittedBox precisa de um filho com tamanho finito: dimensionamos a lista
+    // inteira aqui e a escalamos de uma vez, com 1, 2 ou 3 doses.
+    const alturaTituloLista = Espaco.xxxl + Espaco.m;
+    final alturaCards = proximas.isEmpty ? 0.0 : Medidas.alturaProjetoCartaoProxima * proximas.length + Espaco.m * (proximas.length - 1);
+    final alturaBloco = proximas.isEmpty ? 0.0 : alturaTituloLista + Espaco.m + alturaCards;
     return _Moldura(
       momento: momento,
       rotulos: rotulos,
@@ -244,26 +204,61 @@ class TelaRepouso extends StatelessWidget {
       filho: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Flexible(
-            flex: 3,
-            child: Center(
-              child: proxima == null
-                  ? _Encolhe(
-                      Text(
-                        rotulos.preenchido('sem_dose_hoje', const {}),
-                        style: Tipografia.h3.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    )
-                  : _Encolhe(
-                      CartaoProximaDose(rotulos: rotulos, ocorrencia: proxima),
-                    ),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Center(
+                    child: proximas.isEmpty
+                        ? _Encolhe(
+                            Text(
+                              rotulos.preenchido('sem_dose_hoje', const {}),
+                              style: Tipografia.h3.copyWith(fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.center,
+                            ),
+                          )
+                        : _Encolhe(
+                            SizedBox(
+                              width: Medidas.larguraProjetoCartaoProxima,
+                              height: alturaBloco,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  SizedBox(
+                                    height: alturaTituloLista,
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: _Etiqueta(
+                                        texto: rotulos.preenchido('proximas_doses', const {}).toUpperCase(),
+                                        estilo: Tipografia.h6.copyWith(fontWeight: Tipografia.negrito, letterSpacing: 3),
+                                        icone: Icons.schedule_rounded,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: Espaco.m),
+                                  for (var i = 0; i < proximas.length; i++) ...[
+                                    SizedBox(
+                                      height: Medidas.alturaProjetoCartaoProxima,
+                                      child: CartaoProximaDose(rotulos: rotulos, ocorrencia: proximas[i]),
+                                    ),
+                                    if (i < proximas.length - 1) const SizedBox(height: Espaco.m),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: Espaco.l),
+                Expanded(
+                  flex: 2,
+                  child: GridEstoque(rotulos: rotulos, itens: estoque.itens),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: Espaco.m),
-          Flexible(flex: 4, child: GridEstoque(rotulos: rotulos, itens: estoque.itens)),
           if (aviso != null) FaixaAviso(aviso: aviso!),
         ],
       ),
@@ -282,34 +277,23 @@ class GridEstoque extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final esquerda = itens
-        .where((item) => item.coluna == 'esquerda')
-        .toList()
-      ..sort((a, b) => a.linha.compareTo(b.linha));
-    final direita = itens
-        .where((item) => item.coluna == 'direita')
-        .toList()
-      ..sort((a, b) => a.linha.compareTo(b.linha));
+    final esquerda = itens.where((item) => item.coluna == 'esquerda').toList()..sort((a, b) => a.linha.compareTo(b.linha));
+    final direita = itens.where((item) => item.coluna == 'direita').toList()..sort((a, b) => a.linha.compareTo(b.linha));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _Etiqueta(
-          texto: rotulos.preenchido('estoque', const {}).toUpperCase(),
-          estilo: Tipografia.h6.copyWith(
-            fontWeight: Tipografia.negrito,
-            letterSpacing: 2,
-          ),
-          icone: Icons.inventory_2_outlined,
-        ),
-        const SizedBox(height: Espaco.s),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(child: _ColunaEstoque(rotulos: rotulos, itens: esquerda)),
+              Expanded(
+                child: _ColunaEstoque(rotulos: rotulos, itens: esquerda),
+              ),
               const SizedBox(width: Espaco.m),
-              Expanded(child: _ColunaEstoque(rotulos: rotulos, itens: direita)),
+              Expanded(
+                child: _ColunaEstoque(rotulos: rotulos, itens: direita),
+              ),
             ],
           ),
         ),
@@ -348,10 +332,29 @@ class _CartaoSlot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final quantidade = rotulos.preenchido(
-      'comprimidos',
-      {'quantidade': item.quantidade},
-    );
+    final corTexto = item.vazio ? Cores.textoSuave : Cores.destaqueSuave;
+    final temNome = item.medicamento.trim().isNotEmpty;
+    final temDosagem = item.dosagem.trim().isNotEmpty;
+
+    final Widget colunaEsquerda;
+    if (item.vazio) {
+      colunaEsquerda = Text(rotulos.preenchido('vazio', const {}), style: Tipografia.h6.copyWith(color: corTexto));
+    } else if (temNome || temDosagem) {
+      colunaEsquerda = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            temNome ? item.medicamento : '—',
+            style: Tipografia.h6.copyWith(color: corTexto, fontWeight: Tipografia.negrito),
+          ),
+          if (temDosagem) Text(item.dosagem, style: Tipografia.legenda.copyWith(color: corTexto)),
+        ],
+      );
+    } else {
+      colunaEsquerda = Text('—', style: Tipografia.h6.copyWith(color: corTexto));
+    }
+
     return Container(
       width: double.infinity,
       clipBehavior: Clip.antiAlias,
@@ -361,38 +364,35 @@ class _CartaoSlot extends StatelessWidget {
         border: Border.all(color: Cores.borda, width: 2),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            width: Espaco.s,
-            color: item.vazio ? Cores.borda : Cores.destaque,
-          ),
-          const SizedBox(width: Espaco.s),
+          Container(width: Espaco.s, color: item.vazio ? Cores.borda : Cores.destaque),
           Expanded(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Espaco.s, vertical: Espaco.xs),
+              child: Row(
                 children: [
-                  Text(
-                    item.rotulo,
-                    style: Tipografia.h5.copyWith(fontWeight: Tipografia.negrito),
+                  Expanded(
+                    child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: colunaEsquerda),
                   ),
-                  Text(
-                    item.vazio
-                        ? rotulos.preenchido('vazio', const {})
-                        : item.medicamento.isEmpty
-                        ? quantidade
-                        : '${item.medicamento} · $quantidade',
-                    style: Tipografia.h6.copyWith(
-                      color: item.vazio ? Cores.textoSuave : Cores.destaqueSuave,
+                  const SizedBox(width: Espaco.s),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Row(
+                      children: [
+                        Text(
+                          item.vazio ? '' : '${item.quantidade}',
+                          style: Tipografia.h5.copyWith(color: corTexto, fontWeight: Tipografia.negrito, fontFeatures: Tipografia.tabular),
+                        ),
+                        if (!item.vazio) Icon(Icons.medication, size: 24, color: corTexto),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          const SizedBox(width: Espaco.s),
         ],
       ),
     );
@@ -402,11 +402,7 @@ class _CartaoSlot extends StatelessWidget {
 /// Cartão do repouso: o horário da próxima dose em destaque e, ao lado, o que
 /// tomar. Tudo em uma faixa só, lida de relance à distância.
 class CartaoProximaDose extends StatelessWidget {
-  const CartaoProximaDose({
-    super.key,
-    required this.rotulos,
-    required this.ocorrencia,
-  });
+  const CartaoProximaDose({super.key, required this.rotulos, required this.ocorrencia});
 
   final Rotulos rotulos;
   final Ocorrencia ocorrencia;
@@ -415,8 +411,7 @@ class CartaoProximaDose extends StatelessWidget {
   Widget build(BuildContext context) {
     final detalhes = [
       if (ocorrencia.dosagem.isNotEmpty) ocorrencia.dosagem,
-      if (ocorrencia.slot != null)
-        rotulos.preenchido('slot', {'slot': ocorrencia.slot}),
+      if (ocorrencia.slot != null) rotulos.preenchido('slot', {'slot': ocorrencia.slot}),
     ].join('  ·  ');
 
     // Faixa de destaque à esquerda feita com um Row: o Flutter não aceita
@@ -435,24 +430,11 @@ class CartaoProximaDose extends StatelessWidget {
           Container(width: Espaco.m, color: Cores.destaque),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Espaco.xxxl,
-                vertical: Espaco.xxl,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: Espaco.xxxl, vertical: Espaco.xxl),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _Etiqueta(
-                    texto: rotulos
-                        .preenchido('proxima_dose', const {})
-                        .toUpperCase(),
-                    estilo: Tipografia.h6.copyWith(
-                      fontWeight: Tipografia.negrito,
-                      letterSpacing: 3,
-                    ),
-                    icone: Icons.schedule_rounded,
-                  ),
                   const SizedBox(height: Espaco.l),
                   Flexible(
                     child: _Encolhe(
@@ -461,42 +443,21 @@ class CartaoProximaDose extends StatelessWidget {
                         children: [
                           Text(
                             ocorrencia.horario,
-                            style: Tipografia.h1.copyWith(
-                              height: 1,
-                              fontWeight: Tipografia.negrito,
-                              color: Cores.destaque,
-                              fontFeatures: Tipografia.tabular,
-                            ),
+                            style: Tipografia.h1.copyWith(height: 1, fontWeight: Tipografia.negrito, color: Cores.destaque, fontFeatures: Tipografia.tabular),
                           ),
                           const SizedBox(width: Espaco.xxxl),
                           Container(
                             width: 3,
                             height: 96,
-                            decoration: BoxDecoration(
-                              color: Cores.borda,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
+                            decoration: BoxDecoration(color: Cores.borda, borderRadius: BorderRadius.circular(2)),
                           ),
                           const SizedBox(width: Espaco.xxxl),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                ocorrencia.medicamento,
-                                style: Tipografia.h2.copyWith(
-                                  fontWeight: Tipografia.negrito,
-                                ),
-                              ),
-                              if (detalhes.isNotEmpty) ...[
-                                const SizedBox(height: Espaco.xs),
-                                Text(
-                                  detalhes,
-                                  style: Tipografia.h5.copyWith(
-                                    color: Cores.textoFraco,
-                                  ),
-                                ),
-                              ],
+                              Text(ocorrencia.medicamento, style: Tipografia.h2.copyWith(fontWeight: Tipografia.negrito)),
+                              if (detalhes.isNotEmpty) ...[const SizedBox(height: Espaco.xs), Text(detalhes, style: Tipografia.h5.copyWith(color: Cores.textoFraco))],
                             ],
                           ),
                         ],
@@ -579,30 +540,10 @@ class TelaRegistro extends StatelessWidget {
           const SizedBox(height: Espaco.l),
           Expanded(
             child: posicionar
-                ? Column(
-                    children: [
-                      _Encolhe(
-                        Text(
-                          tela.mensagem,
-                          style: Tipografia.display.copyWith(height: 1.15),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      const SizedBox(height: Espaco.l),
-                      Expanded(
-                        child: PreviewCamera(
-                          quadro: quadro,
-                          status: _statusRegistro,
-                        ),
-                      ),
-                    ],
-                  )
+                ? _MensagemEPreview(mensagem: tela.mensagem, quadro: quadro, status: _statusRegistro)
                 : Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: Espaco.xxl,
-                      vertical: Espaco.l,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: Espaco.xxl, vertical: Espaco.l),
                     decoration: BoxDecoration(
                       color: Cores.fundo.withValues(alpha: 0.55),
                       border: Border.all(color: Cores.destaque, width: 3),
@@ -615,21 +556,14 @@ class TelaRegistro extends StatelessWidget {
                           children: [
                             Text(
                               tela.mensagem,
-                              style: Tipografia.h3.copyWith(
-                                fontWeight: Tipografia.negrito,
-                              ),
+                              style: Tipografia.h3.copyWith(fontWeight: Tipografia.negrito),
                               textAlign: TextAlign.center,
                             ),
                             if (tela.chave == 'registro_slot') ...[
                               const SizedBox(height: Espaco.m),
                               Text(
-                                rotulos.preenchido(
-                                  'registro_slot_dica',
-                                  const {},
-                                ),
-                                style: Tipografia.h5.copyWith(
-                                  color: Cores.textoFraco,
-                                ),
+                                rotulos.preenchido('registro_slot_dica', const {}),
+                                style: Tipografia.h5.copyWith(color: Cores.textoFraco),
                                 textAlign: TextAlign.center,
                               ),
                             ],
@@ -688,9 +622,7 @@ class TelaDose extends StatelessWidget {
     if (visaoAviso != null) return 'Câmera: $visaoAviso';
     if (quadro == null) {
       final segundos = visaoEspera.inSeconds;
-      return segundos < 3
-          ? 'Preparando câmera...'
-          : 'Preparando câmera... ${segundos}s (o primeiro frame demora)';
+      return segundos < 3 ? 'Preparando câmera...' : 'Preparando câmera... ${segundos}s (o primeiro frame demora)';
     }
     return 'Aponte a cartela para a câmera';
   }
@@ -722,43 +654,17 @@ class TelaDose extends StatelessWidget {
           ],
           Expanded(
             child: mostraPreview
-                ? Column(
-                    children: [
-                      _Encolhe(
-                        Text(
-                          tela.mensagem,
-                          style: estiloMensagem,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      const SizedBox(height: Espaco.l),
-                      Expanded(
-                        child: PreviewCamera(
-                          quadro: quadro,
-                          status: _statusVisao,
-                        ),
-                      ),
-                    ],
-                  )
+                ? _MensagemEPreview(mensagem: tela.mensagem, quadro: quadro, status: _statusVisao)
                 : Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: Espaco.xxl,
-                      vertical: Espaco.l,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: Espaco.xxl, vertical: Espaco.l),
                     decoration: BoxDecoration(
                       color: Cores.fundo.withValues(alpha: 0.55),
                       border: Border.all(color: Cores.borda, width: 2),
                       borderRadius: BorderRadius.circular(Medidas.raioCartao),
                     ),
                     child: Center(
-                      child: _Encolhe(
-                        Text(
-                          tela.mensagem,
-                          style: estiloMensagem,
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
+                      child: _Encolhe(Text(tela.mensagem, style: estiloMensagem, textAlign: TextAlign.center)),
                     ),
                   ),
           ),
@@ -767,29 +673,53 @@ class TelaDose extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.arrow_forward_rounded,
-                  size: 32,
-                  color: Cores.textoSuave,
-                ),
+                const Icon(Icons.arrow_forward_rounded, size: 32, color: Cores.textoSuave),
                 const SizedBox(width: Espaco.s),
                 Flexible(
-                  child: Text(
-                    tela.proxima,
-                    style: Tipografia.h5.copyWith(color: Cores.textoFraco),
-                  ),
+                  child: Text(tela.proxima, style: Tipografia.h5.copyWith(color: Cores.textoFraco)),
                 ),
               ],
             ),
             const SizedBox(height: Espaco.l),
           ],
           if (aviso != null) FaixaAviso(aviso: aviso!),
-          if (tela.esperaBotao) ...[
-            const SizedBox(height: Espaco.m),
-            BotaoOk(rotulos: rotulos, aoConfirmar: aoConfirmar),
-          ],
+          if (tela.esperaBotao) ...[const SizedBox(height: Espaco.m), BotaoOk(rotulos: rotulos, aoConfirmar: aoConfirmar)],
         ],
       ),
+    );
+  }
+}
+
+/// Instrução e câmera lado a lado: texto à esquerda (40%) e preview à direita (60%).
+class _MensagemEPreview extends StatelessWidget {
+  const _MensagemEPreview({required this.mensagem, required this.quadro, required this.status});
+
+  final String mensagem;
+  final Uint8List? quadro;
+  final String? status;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          flex: 2,
+          child: Center(
+            child: _Encolhe(
+              SizedBox(
+                width: Medidas.larguraProjetoInstrucaoCamera,
+                child: Text(mensagem, style: Tipografia.display.copyWith(height: 1.15), textAlign: TextAlign.start),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: Espaco.l),
+        Expanded(
+          flex: 3,
+          child: PreviewCamera(quadro: quadro, status: status),
+        ),
+      ],
     );
   }
 }
@@ -826,11 +756,7 @@ class PreviewCamera extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      Icons.photo_camera_outlined,
-                      size: 72,
-                      color: Cores.textoFraco,
-                    ),
+                    Icon(Icons.photo_camera_outlined, size: 72, color: Cores.textoFraco),
                     SizedBox(height: Espaco.s),
                     CircularProgressIndicator(color: Cores.destaque),
                   ],
@@ -838,22 +764,14 @@ class PreviewCamera extends StatelessWidget {
               ),
             )
           else
-            Image.memory(
-              frame,
-              gaplessPlayback: true,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.medium,
-            ),
+            Image.memory(frame, gaplessPlayback: true, fit: BoxFit.contain, filterQuality: FilterQuality.medium),
           if (aviso != null && aviso.isNotEmpty)
             Align(
               alignment: Alignment.bottomCenter,
               child: Container(
                 width: double.infinity,
                 color: Cores.fundo.withValues(alpha: 0.88),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Espaco.l,
-                  vertical: Espaco.s,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: Espaco.l, vertical: Espaco.s),
                 child: Text(
                   aviso,
                   maxLines: 2,
@@ -871,13 +789,7 @@ class PreviewCamera extends StatelessWidget {
 
 /// Moldura comum: cabeçalho com hora, título e indicadores.
 class _Moldura extends StatelessWidget {
-  const _Moldura({
-    required this.momento,
-    required this.rotulos,
-    required this.conectado,
-    required this.filho,
-    this.alarme = false,
-  });
+  const _Moldura({required this.momento, required this.rotulos, required this.conectado, required this.filho, this.alarme = false});
 
   final DateTime momento;
   final Rotulos rotulos;
@@ -892,27 +804,15 @@ class _Moldura extends StatelessWidget {
       decoration: BoxDecoration(
         // Em dose o fundo ganha um degradê verde bem sutil: sinaliza "é com
         // você" sem tirar o contraste do texto.
-        gradient: alarme
-            ? const LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Paleta.primary10, Cores.fundo],
-              )
-            : null,
+        gradient: alarme ? const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Paleta.primary10, Cores.fundo]) : null,
         color: alarme ? null : Cores.fundo,
-        border: Border.all(
-          color: alarme ? Cores.destaque : Colors.transparent,
-          width: 6,
-        ),
+        border: Border.all(color: alarme ? Cores.destaque : Colors.transparent, width: 6),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: Espaco.l + Espaco.xxs,
-              vertical: Espaco.m,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: Espaco.l + Espaco.xxs, vertical: Espaco.m),
             decoration: BoxDecoration(
               color: Cores.painel,
               border: Border.all(color: Cores.borda, width: 2),
@@ -934,11 +834,7 @@ class _Moldura extends StatelessWidget {
                 const SizedBox(width: Espaco.m),
                 Text(
                   hora(momento),
-                  style: Tipografia.h2.copyWith(
-                    height: 1,
-                    fontWeight: Tipografia.negrito,
-                    fontFeatures: Tipografia.tabular,
-                  ),
+                  style: Tipografia.h2.copyWith(height: 1, fontWeight: Tipografia.negrito, fontFeatures: Tipografia.tabular),
                 ),
               ],
             ),
@@ -977,21 +873,12 @@ class _Etiqueta extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: Espaco.l,
-        vertical: Espaco.s,
-      ),
-      decoration: BoxDecoration(
-        color: Cores.destaqueContainer,
-        borderRadius: BorderRadius.circular(Medidas.raioPilula),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: Espaco.l, vertical: Espaco.s),
+      decoration: BoxDecoration(color: Cores.destaqueContainer, borderRadius: BorderRadius.circular(Medidas.raioPilula)),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (icone != null) ...[
-            Icon(icone, size: (estilo.fontSize ?? 28) + 8, color: Paleta.primary80),
-            const SizedBox(width: Espaco.s),
-          ],
+          if (icone != null) ...[Icon(icone, size: (estilo.fontSize ?? 28) + 8, color: Paleta.primary80), const SizedBox(width: Espaco.s)],
           Text(texto, style: estilo.copyWith(color: Paleta.primary90)),
         ],
       ),
@@ -1029,12 +916,7 @@ class IconeConexao extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Icon(
-      conectado ? Icons.wifi : Icons.wifi_off,
-      color: conectado ? Cores.ok : Cores.alerta,
-      size: 44,
-      semanticLabel: conectado ? 'conectado' : 'sem conexão',
-    );
+    return Icon(conectado ? Icons.wifi : Icons.wifi_off, color: conectado ? Cores.ok : Cores.alerta, size: 44, semanticLabel: conectado ? 'conectado' : 'sem conexão');
   }
 }
 
@@ -1064,14 +946,7 @@ class BarraPassos extends StatelessWidget {
                   ? Cores.destaqueSuave
                   : Cores.painelElevado,
               borderRadius: BorderRadius.circular(Espaco.xs),
-              boxShadow: corrente
-                  ? [
-                      BoxShadow(
-                        color: Cores.destaque.withValues(alpha: 0.5),
-                        blurRadius: 12,
-                      ),
-                    ]
-                  : null,
+              boxShadow: corrente ? [BoxShadow(color: Cores.destaque.withValues(alpha: 0.5), blurRadius: 12)] : null,
             ),
           ),
         );
@@ -1097,9 +972,7 @@ class BotaoOk extends StatelessWidget {
           // Texto escuro sobre o verde vivo: contraste bem maior que branco.
           backgroundColor: Cores.ok,
           foregroundColor: Cores.destaqueEscuro,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(Medidas.raioCartao),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Medidas.raioCartao)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1109,10 +982,7 @@ class BotaoOk extends StatelessWidget {
             Flexible(
               child: FittedBox(
                 fit: BoxFit.scaleDown,
-                child: Text(
-                  rotulos.preenchido('pressione_ok', const {}),
-                  style: Tipografia.h3.copyWith(fontWeight: Tipografia.negrito),
-                ),
+                child: Text(rotulos.preenchido('pressione_ok', const {}), style: Tipografia.h3.copyWith(fontWeight: Tipografia.negrito)),
               ),
             ),
           ],
@@ -1132,10 +1002,7 @@ class FaixaAviso extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(top: Espaco.m),
-      padding: const EdgeInsets.symmetric(
-        horizontal: Espaco.l,
-        vertical: Espaco.m,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: Espaco.l, vertical: Espaco.m),
       decoration: BoxDecoration(
         color: Cores.alertaContainer,
         border: Border.all(color: Cores.alerta, width: 3),
@@ -1143,37 +1010,21 @@ class FaixaAviso extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.warning_amber_rounded,
-            color: Cores.alerta,
-            size: 44,
-          ),
+          const Icon(Icons.warning_amber_rounded, color: Cores.alerta, size: 44),
           const SizedBox(width: Espaco.m),
           Expanded(
             child: Text(
               aviso.mensagem,
-              style: Tipografia.h5.copyWith(
-                color: Cores.alertaTexto,
-                fontWeight: FontWeight.w600,
-              ),
+              style: Tipografia.h5.copyWith(color: Cores.alertaTexto, fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: Espaco.m),
           Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: Espaco.m,
-              vertical: Espaco.xxs,
-            ),
-            decoration: BoxDecoration(
-              color: Cores.alerta.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(Medidas.raioPilula),
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: Espaco.m, vertical: Espaco.xxs),
+            decoration: BoxDecoration(color: Cores.alerta.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(Medidas.raioPilula)),
             child: Text(
               aviso.codigo,
-              style: Tipografia.h6.copyWith(
-                color: Cores.alertaTexto,
-                fontWeight: Tipografia.negrito,
-              ),
+              style: Tipografia.h6.copyWith(color: Cores.alertaTexto, fontWeight: Tipografia.negrito),
             ),
           ),
         ],

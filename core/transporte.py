@@ -4,8 +4,13 @@ Fase 3: credencial própria — usuário dedicado do Firebase Auth (email/senha)
 token obtido por `identitytoolkit` e usado como Bearer no Firestore HTTP v1.
 Lê `Medicamentos` (agenda) e registra `Historico` de `dose_tomada` com docId
 determinístico (reenvio idempotente). A Fase 6 (ADR 010) soma a gravação de
-avisos em `Notificacoes` (dose perdida, não devolvido, falha). Sem nomes de
-medicamento em logs (LGPD).
+avisos em `Notificacoes` (dose perdida, não devolvido, falha).
+
+A integração com o app mobile usa a raiz `Dispensadores/{dispenser_id}`:
+`Estoque` (12 slots), `Comandos` (fila de intenções do app) e `Registro`
+(estado do cadastro de cartela). O app nunca grava `Estoque`: ele só cria
+comandos e o core, dono do estoque local, publica o resultado.
+Sem nomes de medicamento em logs (LGPD).
 """
 
 from __future__ import annotations
@@ -152,11 +157,62 @@ def registro_notificacao(ocorrencia: dict | None, payload: dict) -> dict | None:
     return dados
 
 
+def _valor_tipado(campo: dict) -> object:
+    """Lê um `Value` da REST preservando tipo (ao contrário de `_valor`)."""
+    if not isinstance(campo, dict):
+        return None
+    if "stringValue" in campo:
+        return campo["stringValue"]
+    if "booleanValue" in campo:
+        return campo["booleanValue"]
+    if "integerValue" in campo:
+        try:
+            return int(campo["integerValue"])
+        except (TypeError, ValueError):
+            return campo["integerValue"]
+    if "doubleValue" in campo:
+        return campo["doubleValue"]
+    if "arrayValue" in campo:
+        return [_valor_tipado(v) for v in campo["arrayValue"].get("values", [])]
+    if "mapValue" in campo:
+        return _mapa_tipado(campo["mapValue"].get("fields", {}))
+    return None
+
+
+def _mapa_tipado(campos: dict) -> dict:
+    return {chave: _valor_tipado(valor) for chave, valor in campos.items()}
+
+
+def _campo(valor: object) -> dict:
+    """Converte um valor Python no `Value` esperado pela REST do Firestore."""
+    if isinstance(valor, bool):
+        return {"booleanValue": valor}
+    if isinstance(valor, int):
+        return {"integerValue": str(valor)}
+    if isinstance(valor, float):
+        return {"doubleValue": valor}
+    if isinstance(valor, str):
+        return {"stringValue": valor}
+    if valor is None:
+        return {"nullValue": None}
+    if isinstance(valor, dict):
+        return {"mapValue": {"fields": _campos(valor)}}
+    if isinstance(valor, (list, tuple)):
+        return {"arrayValue": {"values": [_campo(item) for item in valor]}}
+    return {"stringValue": str(valor)}
+
+
+def _campos(registro: dict) -> dict:
+    return {chave: _campo(valor) for chave, valor in registro.items()}
+
+
 def _valor(campo: dict) -> object:
     if not isinstance(campo, dict):
         return None
     if "stringValue" in campo:
         return campo["stringValue"]
+    if "booleanValue" in campo:
+        return campo["booleanValue"]
     if "integerValue" in campo:
         try:
             return str(int(campo["integerValue"]))
@@ -221,11 +277,14 @@ def normalizar_medicamentos(docs: list[dict]) -> list[dict]:
             dias.append(
                 {"dia_semana": _DIA_PARA_ABREV.get(str(dia_semana), dia_semana), "horario": horario}
             )
+        dosagem = _valor(campos.get("dosagem")) or ""
+        mg = _valor(campos.get("mg")) or ""
         medicamentos.append(
             {
                 "id": _id_do_doc(doc.get("name", "")),
                 "nome": nome,
-                "dosagem": _valor(campos.get("dosagem")) or "",
+                "dosagem": dosagem,
+                "mg": mg,
                 "dias": dias,
             }
         )
@@ -244,6 +303,21 @@ class Transporte:
     def gravar_notificacao(self, ocorrencia_id: str, tipo: str, aviso: dict) -> bool:
         raise NotImplementedError
 
+    def gravar_estoque(self, itens: list[dict]) -> bool:
+        raise NotImplementedError
+
+    def gravar_registro(self, estado: dict) -> bool:
+        raise NotImplementedError
+
+    def gravar_saude(self, estado: dict) -> bool:
+        raise NotImplementedError
+
+    def ler_comandos(self) -> list[dict]:
+        raise NotImplementedError
+
+    def gravar_comando(self, comando_id: str, registro: dict) -> bool:
+        raise NotImplementedError
+
 
 class TransporteFirestore(Transporte):
     """Transporte real via REST do Firestore com credencial própria."""
@@ -256,10 +330,12 @@ class TransporteFirestore(Transporte):
         api_key: str,
         email: str,
         senha: str,
+        dispenser_id: str = "",
         timeout: float = 15.0,
     ) -> None:
         self._projeto = projeto
         self._usuario_id = usuario_id
+        self._dispenser_id = dispenser_id
         self._api_key = api_key
         self._email = email
         self._senha = senha
@@ -380,11 +456,106 @@ class TransporteFirestore(Transporte):
             return False
         raise ErroTransporte(f"{colecao}: HTTP {resposta.status_code}")
 
+    def _url_dispensador(self, colecao: str, doc_id: str = "") -> str:
+        if not self._dispenser_id:
+            raise ErroTransporte("dispenser_id não configurado")
+        url = f"{self._base()}/Dispensadores/{self._dispenser_id}/{colecao}"
+        return f"{url}/{doc_id}" if doc_id else url
+
+    def _patch(self, url: str, registro: dict) -> bool:
+        """PATCH com tipos preservados (estoque/comandos/estado do cadastro)."""
+        corpo = {"fields": _campos(registro)}
+        resposta = self._pedir(requests.patch, url, json=corpo)
+        if resposta.status_code == 401 and self._requisicao():
+            resposta = self._pedir(requests.patch, url, json=corpo)
+        if resposta.status_code in (200, 201):
+            return True
+        if resposta.status_code in (400, 401, 403, 404):
+            return False
+        raise ErroTransporte(f"dispensador: HTTP {resposta.status_code}")
+
     def gravar_historico(self, ocorrencia_id: str, registro: dict) -> bool:
         return self._gravar("Historico", doc_historico_id(ocorrencia_id), registro)
 
     def gravar_notificacao(self, ocorrencia_id: str, tipo: str, aviso: dict) -> bool:
         return self._gravar("Notificacoes", doc_notificacao_id(ocorrencia_id, tipo), aviso)
+
+    def gravar_estoque(self, itens: list[dict]) -> bool:
+        """Publica os 12 slots em `Estoque/slot_XX` (um doc por slot)."""
+        if not itens:
+            return True
+        atualizado = datetime.now().isoformat(timespec="seconds")
+        ok = True
+        for item in itens:
+            try:
+                slot = int(item["slot"])
+                registro = {
+                    "slot": slot,
+                    "medicamento": str(item.get("medicamento") or ""),
+                    "dosagem": str(item.get("dosagem") or ""),
+                    "quantidade": int(item.get("quantidade") or 0),
+                    "vazio": item.get("vazio") is True,
+                    "atualizadoEm": atualizado,
+                }
+                if not self._patch(
+                    self._url_dispensador("Estoque", f"slot_{slot:02d}"), registro
+                ):
+                    ok = False
+            except (KeyError, TypeError, ValueError) as erro:
+                raise ErroTransporte(f"estoque inválido: {erro}") from erro
+        return ok
+
+    def gravar_registro(self, estado: dict) -> bool:
+        """Publica o estado do cadastro de cartela em `Registro/estado`."""
+        registro = {
+            "registroId": str(estado.get("registroId") or ""),
+            "fase": str(estado.get("fase") or ""),
+            "slot": estado.get("slot"),
+            "quantidade": estado.get("quantidade"),
+            "medicamento": str(estado.get("medicamento") or ""),
+            "dosagem": str(estado.get("dosagem") or ""),
+            "mensagem": str(estado.get("mensagem") or ""),
+            "atualizadoEm": datetime.now().isoformat(timespec="seconds"),
+        }
+        return self._patch(self._url_dispensador("Registro", "estado"), registro)
+
+    def ler_comandos(self) -> list[dict]:
+        """Lê a coleção `Comandos` (o app filtra o status; REST não filtra)."""
+        url = self._url_dispensador("Comandos")
+        resposta = self._pedir(requests.get, url)
+        if resposta.status_code == 401 and self._requisicao():
+            resposta = self._pedir(requests.get, url)
+        if resposta.status_code == 200:
+            comandos: list[dict] = []
+            for doc in resposta.json().get("documents", []):
+                campos = doc.get("fields", {})
+                comandos.append(
+                    {
+                        "id": _id_do_doc(doc.get("name", "")),
+                        "tipo": str(_valor_tipado(campos.get("tipo")) or ""),
+                        "args": _mapa_tipado(campos.get("args", {}).get("mapValue", {}).get("fields", {})),
+                        "status": str(_valor_tipado(campos.get("status")) or ""),
+                        "criadoEm": _valor_tipado(campos.get("criadoEm")),
+                        "processadoEm": _valor_tipado(campos.get("processadoEm")),
+                    }
+                )
+            return comandos
+        if resposta.status_code == 403:
+            raise AutenticacaoFalhou("acesso negado aos comandos")
+        raise ErroTransporte(f"comandos: HTTP {resposta.status_code}")
+
+    def gravar_comando(self, comando_id: str, registro: dict) -> bool:
+        """Atualiza o doc do comando com status/resultado do processamento."""
+        return self._patch(self._url_dispensador("Comandos", comando_id), registro)
+
+    def gravar_saude(self, estado: dict) -> bool:
+        """Publica `Registro/saude`: permite ao app dizer se o core está vivo."""
+        registro = {
+            "ativa": estado.get("ativa") is not False,
+            "dispenserId": self._dispenser_id,
+            "ultimoTick": datetime.now().isoformat(timespec="seconds"),
+        }
+        return self._patch(self._url_dispensador("Registro", "saude"), registro)
 
 
 class TransporteFake(Transporte):
@@ -396,6 +567,10 @@ class TransporteFake(Transporte):
         ]
         self.historico: dict[str, dict] = {}
         self.notificacoes: dict[str, dict] = {}
+        self.estoque: dict[str, dict] = {}
+        self.registro: dict = {}
+        self.saude: dict = {}
+        self.comandos: dict[str, dict] = {}
         self.offline = False
 
     def ler_medicamentos(self) -> list[dict]:
@@ -415,4 +590,34 @@ class TransporteFake(Transporte):
             raise ErroTransporte("offline")
         chave = doc_notificacao_id(ocorrencia_id, tipo)
         self.notificacoes[chave] = dict(aviso)
+        return True
+
+    def gravar_estoque(self, itens: list[dict]) -> bool:
+        if self.offline:
+            raise ErroTransporte("offline")
+        for item in itens:
+            self.estoque[f"slot_{int(item['slot']):02d}"] = dict(item)
+        return True
+
+    def gravar_registro(self, estado: dict) -> bool:
+        if self.offline:
+            raise ErroTransporte("offline")
+        self.registro = dict(estado)
+        return True
+
+    def gravar_saude(self, estado: dict) -> bool:
+        if self.offline:
+            raise ErroTransporte("offline")
+        self.saude = dict(estado, ultimoTick=datetime.now().isoformat(timespec="seconds"))
+        return True
+
+    def ler_comandos(self) -> list[dict]:
+        if self.offline:
+            raise ErroTransporte("offline")
+        return [dict(comando, id=chave) for chave, comando in self.comandos.items()]
+
+    def gravar_comando(self, comando_id: str, registro: dict) -> bool:
+        if self.offline:
+            raise ErroTransporte("offline")
+        self.comandos.setdefault(comando_id, {}).update(registro)
         return True

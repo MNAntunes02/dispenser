@@ -76,6 +76,11 @@
       ]
     },
     {
+      "name": "meta",
+      "version": "1.18.0",
+      "dependencies": []
+    },
+    {
       "name": "collection",
       "version": "1.19.1",
       "dependencies": []
@@ -90,6 +95,11 @@
         "matcher",
         "meta"
       ]
+    },
+    {
+      "name": "vector_math",
+      "version": "2.2.0",
+      "dependencies": []
     },
     {
       "name": "stack_trace",
@@ -118,7 +128,7 @@
     },
     {
       "name": "matcher",
-      "version": "0.12.20",
+      "version": "0.12.19",
       "dependencies": [
         "async",
         "meta",
@@ -129,7 +139,7 @@
     },
     {
       "name": "test_api",
-      "version": "0.7.12",
+      "version": "0.7.11",
       "dependencies": [
         "async",
         "boolean_selector",
@@ -219,16 +229,6 @@
     {
       "name": "vm_service",
       "version": "15.3.0",
-      "dependencies": []
-    },
-    {
-      "name": "meta",
-      "version": "1.19.0",
-      "dependencies": []
-    },
-    {
-      "name": "vector_math",
-      "version": "2.4.4",
       "dependencies": []
     }
   ],

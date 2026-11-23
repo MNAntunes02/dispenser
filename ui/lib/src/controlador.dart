@@ -80,6 +80,9 @@ class EstadoRepouso extends EstadoUI {
   /// concluída. A UI não filtra por horário — quem sabe é o core.
   Ocorrencia? get proxima => agenda.emAberto ?? agenda.primeira;
 
+  /// Doses em aberto a mostrar no repouso (no máximo três).
+  List<Ocorrencia> get proximas => agenda.proximas;
+
   @override
   DateTime get agora => momento;
 }

@@ -334,6 +334,29 @@ def test_dose_passar_da_janela_nao_dispara_em_fila(tmp_path):
     assert db.ultimos_logs()[0]["tipo"] == "doses_passadas"
 
 
+def test_dose_passar_republica_agenda_para_ui_conectada(tmp_path):
+    """Sem isso a UI mantém a dose perdida na lista de próximas."""
+    # Às 07:00 a dose das 08:00 ainda está AGUARDANDO; antecipamos o horário
+    # dela no banco para que caia fora da janela de atraso no tick seguinte.
+    rel = RelogioFake(DIA - timedelta(hours=1))
+    coord, db, pub, _ponte = _montar(tmp_path, _meds(["08:00"]), rel)
+    coord.tick()
+    agendas = [m for m in pub.mensagens if m.get("type") == "agenda"]
+    assert agendas[-1]["ocorrencias"][0]["estado"] == "AGUARDANDO"
+    antes = len(agendas)
+
+    occ_id = db.ocorrencias_do_dia("2026-09-19")[0]["id"]
+    db.conexao.execute(
+        "UPDATE ocorrencias SET horario = '06:00' WHERE id = ?", (occ_id,)
+    )
+    db.conexao.commit()
+    coord.tick()
+
+    agendas = [m for m in pub.mensagens if m.get("type") == "agenda"]
+    assert len(agendas) > antes
+    assert agendas[-1]["ocorrencias"][0]["estado"] == "NAO_ATENDIDA"
+
+
 def test_dose_dentro_da_janela_ainda_dispara(tmp_path):
     """10 min de atraso ainda ajuda o paciente: o alarme toca."""
     rel = RelogioFake(DIA + timedelta(minutes=10))

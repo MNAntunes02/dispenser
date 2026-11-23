@@ -108,6 +108,7 @@ _CHAVES_CRITICAS = (
     "DISPENSER_USER_ID",
     "DISPENSER_FIREBASE_API_KEY",
     "DISPENSER_CREDENTIALS_PATH",
+    "DISPENSER_ID",
 )
 
 
@@ -135,7 +136,12 @@ def _ler_credenciais(caminho: Path) -> dict | None:
     if not email or not senha:
         _erro("credencial sem email/senha")
         return None
-    return {"email": email, "senha": senha}
+    uid = dados.get("uid")
+    return {
+        "email": email,
+        "senha": senha,
+        "dispenser_id": uid if isinstance(uid, str) else "",
+    }
 
 
 def _transporte_de_env() -> dict | None:
@@ -149,11 +155,19 @@ def _transporte_de_env() -> dict | None:
     credencial = _ler_credenciais(Path(caminho))
     if credencial is None:
         return None
+    dispenser_id = (os.environ.get("DISPENSER_ID") or "").strip() or credencial.get(
+        "dispenser_id", ""
+    )
+    if not dispenser_id:
+        # Agenda/histórico continuam funcionando; só a ponte com o app fica
+        # indisponível até o uid do dispensador ser anotado na credencial.
+        _erro("credencial sem uid do dispensador: ponte com o app desativada")
     return {
         "projeto": projeto,
         "usuario_id": usuario_id,
         "api_key": api_key,
         **credencial,
+        "dispenser_id": dispenser_id,
     }
 
 
@@ -177,7 +191,11 @@ def _subir_servidor_ui(coord: Coordenador) -> ServidorUI | None:
     try:
         servidor.iniciar()
     except (OSError, RuntimeError) as erro:
-        _erro(f"UI não disponível em {caminho}: {erro}")
+        _erro(
+            f"UI não disponível em {caminho}: {erro}. "
+            "A tela não receberá dados até o socket ser liberado "
+            "(pgrep -af core.dispenser_main)."
+        )
         coord.definir_publicador_ui(PublicadorLog())
         coord.definir_ui(None)
         return None
@@ -194,7 +212,9 @@ def _montar_agenda(db: Database) -> tuple[object, Sincronizador | None]:
     )
 
 
-def _aplicar_provisionamento(coord: Coordenador, db: Database) -> bool:
+def _aplicar_provisionamento(
+    coord: Coordenador, db: Database, ponte: dict | None = None
+) -> bool:
     """Relê o arquivo provisionado e passa a agenda a vir da nuvem.
 
     Não derruba a dose em andamento: só troca a fonte das próximas
@@ -212,7 +232,11 @@ def _aplicar_provisionamento(coord: Coordenador, db: Database) -> bool:
         return False
     coord.definir_agenda_fonte(fonte)
     coord.definir_envio_outbox(sincronizador.enviar_item)
-    _log("provisionamento aplicado: agenda via Firestore")
+    # O loop principal guarda o transporte num holder: sem isto o SIGHUP trocava
+    # a agenda, mas a ponte com o app continuava com o dispenser_id antigo.
+    if ponte is not None:
+        ponte["sincronizador"] = sincronizador
+    _log("provisionamento aplicado: agenda e ponte via Firestore")
     return True
 
 
@@ -246,10 +270,18 @@ def _rodar() -> None:
         _log(f"trilha local: {removidos} registros antigos removidos")
 
     fonte_agenda, sincronizador = _montar_agenda(db)
+    # Holder: o SIGHUP troca o transporte dentro dele e o loop sempre lê daqui.
+    ponte = {"sincronizador": sincronizador}
     if sincronizador is None:
         _log("ponte simulada; sem backend (aguardando provisionamento)")
     else:
-        _log("ponte simulada; agenda via Firestore")
+        _log("ponte ativa; agenda e comandos via Firestore")
+        try:
+            descartados = sincronizador.descartar_comandos_antigos()
+            if descartados:
+                _log(f"comandos antigos cancelados no boot: {descartados}")
+        except Exception as erro:  # falha de rede não impede o boot
+            _erro(f"limpeza de comandos antigos falhou: {erro}")
     coord = Coordenador(
         config,
         db,
@@ -289,6 +321,18 @@ def _rodar() -> None:
     signal.signal(signal.SIGINT, _finaliza)
     signal.signal(signal.SIGHUP, _recarrega)
 
+    def executar_comando(cmd: dict) -> tuple[bool, str]:
+        """Executa a intenção do app na thread do core e devolve o motivo."""
+        ok = coord.entrada_ui(
+            {
+                "v": 1,
+                "type": "comando",
+                "cmd": str(cmd.get("tipo") or ""),
+                "args": cmd.get("args") or {},
+            }
+        )
+        return bool(ok), "" if ok else coord.motivo_ui()
+
     ultimo_sync = 0.0
     mtime_env = _mtime_env()
     try:
@@ -296,16 +340,33 @@ def _rodar() -> None:
             coord.tick()
             coord.tentar_envio()
             agora = time.monotonic()
+            sincronizador = ponte["sincronizador"]
+            if sincronizador is not None:
+                # Cadastro guiado pelo app: comandos são executados na thread
+                # do core, que continua sendo a única fonte de decisão.
+                try:
+                    sincronizador.atender_dispositivo(
+                        executar_comando,
+                        coord.retrato_estoque(),
+                        coord.retrato_registro(),
+                        saude={"ativa": True},
+                    )
+                except Exception as erro:  # rede não pode travar a dose
+                    _erro(f"ponte com o app falhou: {erro}")
             if sincronizador is not None and agora - ultimo_sync >= config.intervalo_sync_s:
                 ultimo_sync = agora
                 try:
-                    sincronizador.ciclo()
+                    sincronizador.ciclo(
+                        estoque=coord.retrato_estoque(),
+                        registro=coord.retrato_registro(),
+                        saude={"ativa": True},
+                    )
                 except Exception as erro:  # rede: a fila fica pendente
                     _erro(f"sync falhou: {erro}")
             if recarregar or _mtime_env() != mtime_env:
                 recarregar = False
                 mtime_env = _mtime_env()
-                _aplicar_provisionamento(coord, db)
+                _aplicar_provisionamento(coord, db, ponte)
             else:
                 db.purgar_logs()
             saude.pulso()

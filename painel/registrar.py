@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
 
     iniciar = acoes.add_parser("iniciar", help="posiciona a cartela na detecção")
     iniciar.add_argument("--medicamento", default="")
+    iniciar.add_argument("--dosagem", "--mg", dest="dosagem", default="")
 
     manual = acoes.add_parser("manual", help="informa a quantidade sem câmera")
     manual.add_argument("--quantidade", type=int, required=True)
@@ -48,7 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     comandos = ComandosCore(args.socket, ao_logar=_logar)
 
     if args.acao == "iniciar":
-        enviado = comandos.iniciar_registro(args.medicamento, assincrono=False)
+        enviado = comandos.iniciar_registro(
+            args.medicamento, args.dosagem, assincrono=False
+        )
         mensagem = "registro iniciado"
     elif args.acao == "manual":
         enviado = comandos.registrar_manual(

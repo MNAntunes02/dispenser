@@ -19,6 +19,8 @@ from core.coordenador import AgendaMemo, Coordenador
 from core.dispenser_main import (
     _aplicar_provisionamento,
     _carregar_env_arquivo,
+    _CHAVES_CRITICAS,
+    _transporte_de_env,
 )
 from core.provision_main import _ler_uid
 from core.sync import FonteAgendaLocal
@@ -71,6 +73,26 @@ def test_ler_uid_ausente_ou_invalido(tmp_path):
     assert _ler_uid(tmp_path / "nao-existe.json") == ""
 
 
+def test_transporte_de_env_usa_uid_da_credencial_para_a_ponte(tmp_path, monkeypatch):
+    credencial = tmp_path / "credencial.json"
+    credencial.write_text(
+        json.dumps({"email": "disp@x.com", "senha": "s", "uid": "iBIxf"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FIREBASE_PROJECT_ID", "projeto")
+    monkeypatch.setenv("DISPENSER_USER_ID", "paciente")
+    monkeypatch.setenv("DISPENSER_FIREBASE_API_KEY", "chave")
+    monkeypatch.setenv("DISPENSER_CREDENTIALS_PATH", str(credencial))
+    monkeypatch.delenv("DISPENSER_ID", raising=False)
+
+    cfg = _transporte_de_env()
+    assert cfg["dispenser_id"] == "iBIxf"
+    assert cfg["usuario_id"] == "paciente"
+
+    monkeypatch.setenv("DISPENSER_ID", "sobrescrito")
+    assert _transporte_de_env()["dispenser_id"] == "sobrescrito"
+
+
 # --- recarga por SIGHUP (Fase 7) ---------------------------------------------
 
 
@@ -102,6 +124,7 @@ def _provisionamento_completo(monkeypatch, tmp_path) -> None:
         "DISPENSER_USER_ID",
         "DISPENSER_FIREBASE_API_KEY",
         "DISPENSER_CREDENTIALS_PATH",
+        "DISPENSER_ID",
     ):
         monkeypatch.delenv(chave, raising=False)
 
@@ -116,6 +139,21 @@ def test_sighup_troca_a_agenda_pela_nuvem(monkeypatch, tmp_path):
         assert isinstance(coord.fonte_agenda, FonteAgendaLocal)
         # Com entrega configurada, a dose tomada chega ao cuidador.
         assert coord.tentar_envio() == 0  # fila vazia, mas o caminho existe
+    finally:
+        coord.finalizar()
+
+
+def test_sighup_tambem_troca_o_transporte_da_ponte(monkeypatch, tmp_path):
+    """O loop não pode continuar com o `dispenser_id` antigo após o pareamento."""
+    _provisionamento_completo(monkeypatch, tmp_path)
+    db = Database(tmp_path / "s.db")
+    db.conectar()
+    coord = _coordenador(tmp_path, db)
+    holder = {"sincronizador": None}
+    try:
+        assert _aplicar_provisionamento(coord, db, holder) is True
+        assert holder["sincronizador"] is not None
+        assert "DISPENSER_ID" in _CHAVES_CRITICAS
     finally:
         coord.finalizar()
 

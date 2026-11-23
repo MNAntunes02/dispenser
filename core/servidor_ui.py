@@ -326,7 +326,10 @@ class ServidorUI:
             return
         finally:
             teste.close()
-        raise RuntimeError(f"já existe uma UI conectada em {self._caminho}")
+        raise RuntimeError(
+            f"já existe um processo ouvindo em {self._caminho}; "
+            "mate o core antigo (pgrep -af core.dispenser_main) antes de iniciar"
+        )
 
     def _fechar(self, cliente: _Cliente) -> None:
         cliente.vivo = False

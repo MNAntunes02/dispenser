@@ -63,6 +63,7 @@ TEXTOS: dict[str, str] = {
     # Registro de estoque
     "registro_estoque": "Registro de estoque (12 slots)",
     "registro_medicamento": "Medicamento:",
+    "registro_dosagem": "mg:",
     "registro_iniciar": "Iniciar registro",
     "registro_iniciado": "registro iniciado; posicione a cartela na detecção",
     "registro_quantidade": "Quantidade:",

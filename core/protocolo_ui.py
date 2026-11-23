@@ -45,6 +45,7 @@ COMANDOS_REGISTRO = (
     "registrar_leitura",
     "registrar_manual",
     "confirmar_registro",
+    "cancelar_registro",
 )
 
 #: Ações de botão aceitas. A política aprovada não tem soneca: só "confirma".
@@ -152,10 +153,32 @@ def comando_liberar_proximo() -> dict:
     return envelope("comando", cmd="liberar_proximo")
 
 
-def comando_iniciar_registro(medicamento: str | None = None) -> dict:
-    """Inicia o registro: a cartela vai para a posição de detecção."""
-    args = {"medicamento": str(medicamento).strip()} if medicamento else None
-    return envelope("comando", cmd="iniciar_registro", args=args)
+def comando_iniciar_registro(
+    medicamento: str | None = None,
+    dosagem: str | None = None,
+    mg: str | None = None,
+    registro_id: str | None = None,
+) -> dict:
+    """Inicia o registro: a cartela vai para a posição de detecção.
+
+    `registro_id` vem do app mobile quando o cadastro é guiado por ele; o core
+    gera um UUID quando a chamada é local (painel/CLI).
+    """
+    args: dict[str, str] = {}
+    if medicamento:
+        args["medicamento"] = str(medicamento).strip()
+    valor_mg = dosagem if dosagem is not None else mg
+    if valor_mg is not None and str(valor_mg).strip():
+        args["dosagem"] = str(valor_mg).strip()
+    if registro_id:
+        args["registroId"] = str(registro_id).strip()
+    return envelope("comando", cmd="iniciar_registro", args=args or None)
+
+
+def comando_cancelar_registro(registro_id: str | None = None) -> dict:
+    """Cancela o cadastro em andamento (app mobile/painel)."""
+    args = {"registroId": str(registro_id)} if registro_id else None
+    return envelope("comando", cmd="cancelar_registro", args=args)
 
 
 def comando_registrar_leitura(registro_id: str, quantidade: int) -> dict:
@@ -182,6 +205,20 @@ def comando_confirmar_registro(registro_id: str) -> dict:
         "comando",
         cmd="confirmar_registro",
         args={"registroId": str(registro_id)},
+    )
+
+
+def comando_limpar_slot(slot: int) -> dict:
+    """Esvazia um slot do estoque (ação administrativa)."""
+    return envelope("comando", cmd="limpar_slot", args={"slot": int(slot)})
+
+
+def comando_consumir_slot(slot: int, quantidade: int = 1) -> dict:
+    """Desconta comprimidos de um slot manualmente (ação administrativa)."""
+    return envelope(
+        "comando",
+        cmd="consumir_slot",
+        args={"slot": int(slot), "quantidade": int(quantidade)},
     )
 
 

@@ -131,6 +131,13 @@ class Agenda extends MensagemCore {
   Ocorrencia? get emAberto =>
       ocorrencias.where((o) => o.emAberto).firstOrNull;
 
+  /// Até três doses ainda em aberto, na ordem publicada pelo core.
+  ///
+  /// A UI não compara horários: quem decide o estado da dose é o core
+  /// (ADR 009). O limite mantém os cards legíveis à distância no LCD.
+  List<Ocorrencia> get proximas =>
+      ocorrencias.where((o) => o.emAberto).take(3).toList();
+
   Ocorrencia? get primeira => ocorrencias.isEmpty ? null : ocorrencias.first;
 
   factory Agenda.deJson(Map<String, Object?> json) {
@@ -155,6 +162,7 @@ class ItemEstoque {
     required this.linha,
     required this.coluna,
     required this.medicamento,
+    this.dosagem = '',
     required this.quantidade,
     required this.vazio,
   });
@@ -164,6 +172,7 @@ class ItemEstoque {
   final int linha;
   final String coluna;
   final String medicamento;
+  final String dosagem;
   final int quantidade;
   final bool vazio;
 
@@ -173,6 +182,7 @@ class ItemEstoque {
     linha: json['linha'] is int ? json['linha'] as int : 0,
     coluna: '${json['coluna'] ?? 'esquerda'}',
     medicamento: '${json['medicamento'] ?? ''}',
+    dosagem: '${json['dosagem'] ?? json['mg'] ?? ''}',
     quantidade: json['quantidade'] is int ? json['quantidade'] as int : 0,
     vazio: json['vazio'] == true,
   );
